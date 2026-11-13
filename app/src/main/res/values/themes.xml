@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.Caalin" parent="Theme.MaterialComponents.Light.DarkActionBar">
+        <item name="colorPrimary">@color/brand</item>
+        <item name="colorPrimaryVariant">@color/brand_dark</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">#1F2933</item>
+        <item name="android:statusBarColor">@color/brand_dark</item>
+        <item name="android:windowBackground">@color/bg</item>
+    </style>
+</resources>

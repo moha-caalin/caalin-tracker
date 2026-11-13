@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Caalin Tracker</string>
+    <string name="ussd_service_label">Caalin Tracker auto-PIN</string>
+    <string name="ussd_service_desc">Lets Caalin Tracker type your saved PIN into the mobile-money USSD screen after you confirm with your fingerprint, and read the reply so the transaction is saved. It only acts while a send you started is in progress.</string>
+</resources>

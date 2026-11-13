@@ -1,0 +1,45 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.14.3
+      - name: Build
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
+      - name: Publish APK to the apk branch
+        run: |
+          mkdir out
+          cp app/build/outputs/apk/release/app-release.apk out/CaalinTracker.apk
+          cd out
+          git init -q -b apk
+          git add .
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "APK from ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" apk
+      - name: Publish build log
+        if: always()
+        run: |
+          mkdir logout
+          cp build.log logout/ 2>/dev/null || echo "no log" > logout/build.log
+          cd logout
+          git init -q -b build-log
+          git add .
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "Log from ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" build-log
