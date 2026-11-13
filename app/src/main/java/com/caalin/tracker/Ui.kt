@@ -248,7 +248,7 @@ fun Context.askText(title: String, value: String = "", hint: String = "", onOk: 
     val box = vbox(20).apply { add(f) }
     AlertDialog.Builder(this).setTitle(title).setView(box)
         .setPositiveButton("Save") { _, _ -> f.text.toString().trim().takeIf { it.isNotEmpty() }?.let(onOk) }
-        .setNegativeButton("Cancel", null).show()
+        .setNegativeButton("Cancel", null).showKb()
 }
 
 /** A white card holding a list of rows separated by thin lines. */
@@ -273,7 +273,7 @@ fun AppCompatActivity.showTx(t0: Tx, onChanged: () -> Unit) {
     body.add(text((if (incoming) "+" else "−") + money(t.amount), 30f, true), top = 2)
     body.add(text(t.who + if (t.name.isNotBlank() && t.phone.isNotBlank()) "  (${t.phone})" else "", 15f), top = 6)
     body.add(text("${t.walletName} · ${dateText(t.createdAt)}", 13f, color = MUTED), top = 2)
-    if (t.phone.isNotBlank()) body.add(text("View everything with ${Db.displayName(t.phone)} →", 14f, true, BRAND).apply {
+    if (t.phone.isNotBlank()) body.add(text("View everything with ${Db.displayName(t.phone)}  ›", 14f, true, BRAND).apply {
         setPadding(0, dp(8), 0, 0); setOnClickListener { openPerson(t.phone) }
     })
     body.add(text(statusLabel(t.status) + (if (t.source == "SMS") " · from SMS" else " · sent from app") +
@@ -382,5 +382,13 @@ fun normalizePhone(s: String): String {
     if (d.startsWith("00252")) d = d.drop(5)
     else if (d.startsWith("252") && d.length >= 12) d = d.drop(3)
     if (d.startsWith("0") && d.length >= 10) d = d.drop(1)
+    return d
+}
+
+/** Shows a dialog and opens the keyboard on its first text box. */
+fun AlertDialog.Builder.showKb(): AlertDialog {
+    val d = create()
+    d.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+    d.show()
     return d
 }

@@ -113,7 +113,7 @@ class MainActivity : BaseActivity() {
         histList = null
         val page = when (tab) {
             0 -> home(); 1 -> history(); 2 -> peoplePage(); 3 -> reportsPage(); 5 -> vbox().apply {
-                add(text("‹  More", 15f, true, BRAND).apply { setPadding(dp(20), dp(16), dp(20), 0); setOnClickListener { tab = 4; render() } })
+                add(hbox().apply { setPadding(dp(14), dp(14), dp(20), 0); add(icon(R.drawable.ic_back, BRAND, 22), dp(22), dp(22), end = 8); add(text("More", 15f, true, BRAND), WRAP); setOnClickListener { tab = 4; render() } })
                 add(notesPage())
             }
             else -> more()
@@ -387,7 +387,7 @@ class MainActivity : BaseActivity() {
             bal != null -> "Balance ${money(bal)}"
             else -> "Balance —"
         }, 13f, color = if (w.template.isBlank()) AMBER else MUTED), top = 2)
-        v.add(text(if (w.template.isBlank()) "Set up →" else "Send →", 14f, true, BRAND), top = 12)
+        v.add(text(if (w.template.isBlank()) "Set up  ›" else "Send  ›", 14f, true, BRAND), top = 12)
         c.addView(v)
         c.setOnClickListener {
             val target = if (w.template.isBlank()) WalletEditActivity::class.java else SendActivity::class.java
@@ -591,7 +591,7 @@ class MainActivity : BaseActivity() {
         sms.addView(sv)
         page.add(sms)
 
-        page.add(text("Caalin Tracker 1.5", 12f, color = MUTED).apply {
+        page.add(text("Caalin Tracker 1.5.1", 12f, color = MUTED).apply {
             gravity = Gravity.CENTER; setPadding(0, dp(24), 0, dp(8))
         })
         return page
@@ -649,9 +649,10 @@ class MainActivity : BaseActivity() {
         if (shown.isEmpty()) return null
         val rows = shown.map { c ->
             val r = hbox().apply { setPadding(dp(14), dp(14), dp(14), dp(14)) }
-            r.add(text(if (c.ok) "✓" else "!", 15f, true, if (c.ok) GREEN else AMBER).apply {
+            if (c.ok) r.add(badge(GREEN_BG, 34, R.drawable.ic_tick, GREEN), dp(34), dp(34), end = 14)
+            else r.add(text("!", 16f, true, AMBER).apply {
                 gravity = Gravity.CENTER
-                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(if (c.ok) GREEN_BG else AMBER_BG) }
+                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(AMBER_BG) }
             }, dp(34), dp(34), end = 14)
             val m = vbox()
             m.add(text(c.title, 15f, true))

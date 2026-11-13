@@ -158,12 +158,12 @@ fun MainActivity.reportsPage(): View {
             if (onClick != null) r.setOnClickListener { onClick() }
             bv.add(r, top = 6)
         }
-        line("Opening balance  ✎", open?.let { money(it) } ?: "Tap to set", if (open == null) AMBER else BRAND) {
+        line("Opening balance (tap to edit)", open?.let { money(it) } ?: "Tap to set", if (open == null) AMBER else BRAND) {
             val f = field("0.00", InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, open?.let { amountText(it) } ?: "")
             AlertDialog.Builder(this).setTitle("Opening balance — ${w.name}").setView(vbox(20).apply { add(f) })
                 .setPositiveButton("Save") { _, _ -> Prefs.setOpening(w.id, f.text.toString().toDoubleOrNull()); render() }
                 .setNeutralButton("Use from SMS") { _, _ -> Prefs.setOpening(w.id, null); render() }
-                .setNegativeButton("Cancel", null).show()
+                .setNegativeButton("Cancel", null).showKb()
         }
         line("Received", "+" + money(t[0]), GREEN)
         line("Sent", "−" + money(t[1]), RED)
@@ -174,7 +174,7 @@ fun MainActivity.reportsPage(): View {
                 line("Real balance (SMS)", money(real))
                 val diff = real - exp
                 if (kotlin.math.abs(diff) >= 0.01) line("Difference", (if (diff < 0) "−" else "+") + money(diff), AMBER)
-                else line("Difference", "None ✓", GREEN)
+                else line("Difference", "None ✔", GREEN)
             }
         } else if (real != null) line("Real balance (SMS)", money(real))
     }

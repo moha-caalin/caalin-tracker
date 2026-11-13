@@ -41,6 +41,8 @@ class SendActivity : BaseActivity() {
     private lateinit var amountView: TextView
     private lateinit var sumView: TextView
     private lateinit var catRow: LinearLayout
+    private lateinit var catScroll: HorizontalScrollView
+    private lateinit var toCard: LinearLayout
     private lateinit var sendBtn: com.google.android.material.button.MaterialButton
 
     private val pickContact = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -74,27 +76,32 @@ class SendActivity : BaseActivity() {
         Db.latestBalance(w.id)?.let { head.add(text(money(it), 15f, true, WHITE), WRAP) }
         root.add(head)
 
-        val col = vbox(14).apply { gravity = Gravity.BOTTOM }
-        // Who
+        val col = vbox(14)
+        // Who: a clear card at the top, then the people to pick from
+        val card = card()
+        toCard = vbox(16)
+        card.addView(toCard)
+        card.setOnClickListener { if (phone.isEmpty()) newNumber() }
+        col.add(card)
+        toLine = hbox(); hints = hbox()
         peopleRow = hbox()
-        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(peopleRow) })
-        toLine = hbox()
-        col.add(toLine, top = 6)
-        hints = hbox()
-        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(hints) }, top = 4)
-        // Amount
-        amountView = text("$0", 44f, true, MUTED).apply { gravity = Gravity.CENTER }
-        col.add(amountView, top = 2)
+        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(peopleRow) }, top = 12)
+        // Amount in the middle of the free space
+        col.add(View(this), MATCH, 0, weight = 1f)
+        amountView = text("$0", 46f, true, MUTED).apply { gravity = Gravity.CENTER }
+        col.add(amountView, top = 4)
         sumView = text("", 14f, true, BRAND).apply { gravity = Gravity.CENTER }
         col.add(sumView)
+        col.add(View(this), MATCH, 0, weight = 1f)
         val quick = hbox()
         listOf(1, 5, 10, 20, 50, 100).forEach { q -> quick.add(pill("$$q", false) { amountStr = q.toString(); refresh() }, WRAP, end = 8) }
-        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 6)
+        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 8)
         // What for
         catRow = hbox()
-        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(catRow) }, top = 10)
-        // Keypad
-        col.add(keypad(), top = 8)
+        catScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(catRow) }
+        col.add(catScroll, top = 10)
+        // Keypad in thumb reach
+        col.add(keypad(), top = 4)
 
         val sv = ScrollView(this).apply { isFillViewport = true; addView(col) }
         root.add(sv, MATCH, 0, weight = 1f)
@@ -162,34 +169,53 @@ class SendActivity : BaseActivity() {
             try { pickContact.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)) }
             catch (e: Exception) { toast("No contacts app found") }
         }
-        dlg = AlertDialog.Builder(this).setTitle("New number").setView(vbox(20).apply { add(row) })
+        f.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+        f.setSingleLine()
+        f.setOnEditorActionListener { _, _, _ -> dlg.dismiss(); choose(normalizePhone(f.text.toString()), ""); true }
+        dlg = AlertDialog.Builder(this).setTitle("Who are you paying?").setView(vbox(20).apply {
+            add(row); add(text("Type the number, or tap the person icon to pick a contact.", 12.5f, color = MUTED), top = 8)
+        })
             .setPositiveButton("Use") { _, _ -> choose(normalizePhone(f.text.toString()), "") }
             .setNegativeButton("Cancel", null).create()
+        dlg.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
         dlg.show()
         f.requestFocus()
     }
 
     private fun drawTo() {
-        toLine.removeAllViews()
-        hints.removeAllViews()
+        toCard.removeAllViews()
         if (phone.isEmpty()) {
-            toLine.add(text("Tap a person above, or + for a new number", 14f, color = MUTED).apply { gravity = Gravity.CENTER }, MATCH)
+            val r = hbox()
+            r.add(badge(GREEN_BG, 46, R.drawable.ic_people, BRAND), dp(46), dp(46), end = 14)
+            val m = vbox()
+            m.add(text("Who are you paying?", 17f, true))
+            m.add(text("Tap a person below, or + for a new number", 13f, color = MUTED), top = 2)
+            r.add(m, 0, weight = 1f)
+            toCard.add(r)
             return
         }
-        toLine.add(text("To ", 14f, color = MUTED), WRAP)
-        toLine.add(text(who.ifBlank { phone }, 15f, true).apply { maxLines = 1 }, 0, weight = 1f)
-        if (who.isNotBlank()) toLine.add(text(phone, 13f, color = MUTED), WRAP)
-        // Smart hints: what this person is waiting for.
-        Smart.openOrders(phone, OUT).take(3).forEach { (o, m) ->
-            hints.add(pill("📦 ${o.title.ifBlank { "Order" }.take(16)} · ${money(m.left)} left", orderId == o.id) {
+        val r = hbox()
+        val name = who.ifBlank { phone }
+        r.add(badge(w.color, 46, letter = name.take(1).uppercase()), dp(46), dp(46), end = 14)
+        val m = vbox()
+        m.add(text(name, 17f, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+        m.add(text(if (who.isNotBlank()) phone else "New number", 13f, color = MUTED), top = 2)
+        r.add(m, 0, weight = 1f)
+        r.add(text("Change", 14f, true, BRAND).apply { setPadding(dp(8), dp(8), 0, dp(8)); setOnClickListener { newNumber() } }, WRAP)
+        toCard.add(r)
+        // What this person is waiting for
+        val hintRow = hbox()
+        Smart.openOrders(phone, OUT).take(3).forEach { (o, mo) ->
+            hintRow.add(pill("Order: ${o.title.ifBlank { "#${o.id}" }.take(16)} · ${money(mo.left)} left", orderId == o.id) {
                 orderId = if (orderId == o.id) null else o.id
-                if (orderId != null) { amountStr = amountText(m.left); Db.categoryByName("Stock purchase", OUT)?.let { if (!userCat) categoryId = it } }
+                if (orderId != null) { amountStr = amountText(mo.left); if (!userCat) Db.categoryByName("Stock purchase", OUT)?.let { categoryId = it } }
                 drawTo(); drawCats(); refresh()
             }, WRAP, end = 8)
         }
         Db.debts().filter { !it.closed && it.direction == Debt.ME && last9(it.phone) == phone }.take(2).forEach { d ->
-            hints.add(pill("You owe ${money(d.left)}", false) { amountStr = amountText(d.left); refresh() }, WRAP, end = 8)
+            hintRow.add(pill("You owe ${money(d.left)}", false) { amountStr = amountText(d.left); refresh() }, WRAP, end = 8)
         }
+        if (hintRow.childCount > 0) toCard.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(hintRow) }, top = 12)
     }
 
     private fun drawCats() {
@@ -207,6 +233,11 @@ class SendActivity : BaseActivity() {
             setPadding(dp(14), dp(9), dp(14), dp(9))
             setOnClickListener { askText("New expense category") { n -> categoryId = Db.addCategory(n, OUT); userCat = true; drawCats(); refresh() } }
         }, WRAP)
+        val idx = Db.categories(OUT).indexOfFirst { it.id == categoryId }
+        catScroll.post {
+            val target = if (idx >= 0) catRow.getChildAt(idx + 1) else null
+            catScroll.scrollTo(if (target != null) (target.left - dp(60)).coerceAtLeast(0) else 0, 0)
+        }
     }
 
     private fun keypad(): View {
@@ -223,7 +254,16 @@ class SendActivity : BaseActivity() {
                         when (k) {
                             "⌫" -> amountStr = amountStr.dropLast(1)
                             "=" -> Calc.eval(amountStr)?.let { amountStr = amountText(it) }
-                            else -> if (amountStr.length < 24) amountStr += k
+                            "." -> {
+                                val part = amountStr.takeLastWhile { it.isDigit() || it == '.' }
+                                if (!part.contains('.')) amountStr += if (part.isEmpty()) "0." else "."
+                            }
+                            else -> if (amountStr.length < 24) {
+                                val last = amountStr.lastOrNull()
+                                // no two signs in a row, and no sign at the start except minus
+                                val badSign = k in listOf("+", "−", "×") && (last == null || last in "+−×.")
+                                if (!badSign) amountStr += k
+                            }
                         }
                         refresh()
                     }
@@ -236,7 +276,7 @@ class SendActivity : BaseActivity() {
     }
 
     private fun refresh() {
-        amountView.text = "$" + amountStr.ifEmpty { "0" }
+        amountView.text = "$" + amountStr.ifEmpty { "0" }.let { if (it.startsWith(".")) "0$it" else it }
         amountView.setTextColor(if (amountStr.isEmpty()) MUTED else INK)
         sumView.text = if (Calc.hasOperator(amountStr)) Calc.eval(amountStr)?.let { "= " + money(it) } ?: "…" else ""
         sumView.visibility = if (sumView.text.isEmpty()) View.GONE else View.VISIBLE

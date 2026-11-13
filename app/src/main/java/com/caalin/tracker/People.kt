@@ -187,7 +187,7 @@ class PersonActivity : BaseActivity() {
             mm.add(text(o.title.ifBlank { "Order #${o.id}" }, 15f, true))
             mm.add(text(OrderStatus.NAMES[o.status] + " · total ${money(m.total)}", 12.5f, color = MUTED), top = 2)
             r.add(mm, 0, weight = 1f)
-            r.add(text(if (m.left > 0.009) money(m.left) + " left" else "Paid ✓", 13.5f, true, if (m.left > 0.009) AMBER else GREEN), WRAP)
+            r.add(text(if (m.left > 0.009) money(m.left) + " left" else "Paid ✔", 13.5f, true, if (m.left > 0.009) AMBER else GREEN), WRAP)
             r.setOnClickListener { startActivity(Intent(this, OrderActivity::class.java).putExtra("id", o.id)) }
             r as View
         }))
@@ -218,9 +218,11 @@ class PersonActivity : BaseActivity() {
         if (tasks.isEmpty() && notes.isEmpty()) box.add(text("Nothing yet.", 13.5f, color = MUTED).apply { setPadding(dp(4), 0, 0, 0) })
         tasks.forEach { t -> box.add(card().apply {
             addView(hbox().apply {
-                setPadding(dp(16), dp(12), dp(16), dp(12))
-                add(text("☐  " + t.title, 15f), 0, weight = 1f)
-                add(text("Done", 13.5f, true, BRAND).apply { setOnClickListener { Db.saveTask(t.copy(done = true)); render() } }, WRAP)
+                setPadding(dp(8), dp(6), dp(16), dp(6))
+                add(android.widget.CheckBox(this@PersonActivity).apply {
+                    setOnCheckedChangeListener { _, b -> if (b) { Db.saveTask(t.copy(done = true)); render() } }
+                }, WRAP)
+                add(text(t.title, 15f), 0, weight = 1f)
             })
         }, top = 8) }
         notes.forEach { n -> box.add(card().apply {
@@ -252,7 +254,7 @@ class PersonActivity : BaseActivity() {
         b.add(text("Customers' payments go to their orders and debts, and suppliers' to purchase orders, automatically.", 12f, color = MUTED), top = 10)
         AlertDialog.Builder(this).setTitle("Edit person").setView(b)
             .setPositiveButton("Save") { _, _ -> Db.savePerson(p.copy(name = n.text.toString().trim(), type = type, note = note.text.toString().trim())); render() }
-            .setNegativeButton("Cancel", null).show()
+            .setNegativeButton("Cancel", null).showKb()
     }
 
     private fun addDebtFor(name: String) {
@@ -270,7 +272,7 @@ class PersonActivity : BaseActivity() {
             .setPositiveButton("Save") { _, _ ->
                 val a = Calc.eval(f.text.toString()) ?: return@setPositiveButton
                 Db.saveDebt(Debt(name = name, phone = phone, direction = dir, amount = a, note = note.text.toString().trim())); render()
-            }.setNegativeButton("Cancel", null).show()
+            }.setNegativeButton("Cancel", null).showKb()
     }
 }
 

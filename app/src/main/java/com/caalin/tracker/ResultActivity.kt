@@ -45,7 +45,8 @@ class ResultActivity : BaseActivity() {
         val root = FrameLayout(this).apply { background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(c1, c2)) }
         val col = vbox(24).apply { gravity = Gravity.CENTER_HORIZONTAL }
 
-        val mark = text(if (ok) "✓" else if (failed) "✕" else "?", 54f, true, c1).apply {
+        val mark: View = if (ok || failed) badge(WHITE, 112, if (ok) R.drawable.ic_tick else R.drawable.ic_close, c1)
+        else text("?", 54f, true, c1).apply {
             gravity = Gravity.CENTER
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(WHITE) }
         }

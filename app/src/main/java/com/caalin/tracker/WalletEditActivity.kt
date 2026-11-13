@@ -94,7 +94,7 @@ class WalletEditActivity : BaseActivity() {
             box.add(button("Delete this money type", outlined = true) {
                 AlertDialog.Builder(this).setMessage("Delete ${w.name}? Its saved transactions stay in History.")
                     .setPositiveButton("Delete") { _, _ -> Db.deleteWallet(w.id); finish() }
-                    .setNegativeButton("Cancel", null).show()
+                    .setNegativeButton("Cancel", null).showKb()
             })
         }
         setContentView(ScrollView(this).apply { addView(box) })
@@ -157,7 +157,7 @@ class WalletEditActivity : BaseActivity() {
                 }
             }
             .setNegativeButton("Cancel", null)
-            .show()
+            .showKb()
     }
 
     private fun encryptAndSave(pin: String) {

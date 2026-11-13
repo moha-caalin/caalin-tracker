@@ -65,7 +65,7 @@ private fun MainActivity.editNote(n: Note?) {
         }
         .setNegativeButton("Cancel", null)
     if (n != null) d.setNeutralButton("Delete") { _, _ -> Db.deleteNote(n.id); render() }
-    d.show()
+    d.showKb()
 }
 
 // ---------------- Debts ----------------
@@ -102,7 +102,7 @@ private fun MainActivity.debtsSection(page: LinearLayout) {
         val m = vbox()
         m.add(text(d.name.ifBlank { d.phone }, 15f, true).apply { maxLines = 1 })
         val sub = when {
-            d.closed -> "Settled ✓"
+            d.closed -> "Settled ✔"
             d.paid > 0 -> "Paid ${money(d.paid)} of ${money(d.amount)}"
             else -> if (they) "Owes you" else "You owe"
         } + (d.due?.let { " · due ${dateText(it).substringBefore(",")}" } ?: "")
@@ -169,7 +169,7 @@ private fun MainActivity.editDebt(d: Debt?) {
         .setNegativeButton("Cancel", null)
     if (d != null && !d.closed) b.setNeutralButton("Record payment") { _, _ -> recordPayment(d) }
     else if (d != null) b.setNeutralButton("Delete") { _, _ -> Db.deleteDebt(d.id); render() }
-    b.show()
+    b.showKb()
 }
 
 private fun MainActivity.recordPayment(d: Debt) {
@@ -184,7 +184,7 @@ private fun MainActivity.recordPayment(d: Debt) {
             render()
         }
         .setNeutralButton("Delete debt") { _, _ -> Db.deleteDebt(d.id); render() }
-        .setNegativeButton("Cancel", null).show()
+        .setNegativeButton("Cancel", null).showKb()
 }
 
 // ---------------- Tasks ----------------
@@ -228,12 +228,12 @@ private fun MainActivity.tasksSection(page: LinearLayout) {
     val done = tasks.filter { it.done }
     if (tasks.isEmpty()) { page.add(emptyCard("Nothing to do yet. Add calls to make, goods to collect, payments to follow up."), top = 12); return }
     if (open.isNotEmpty()) page.add(listCard(open.map { taskRow(it) { render() } }), top = 12)
-    else page.add(emptyCard("All done ✓"), top = 12)
+    else page.add(emptyCard("All done ✔"), top = 12)
     if (done.isNotEmpty()) {
         page.add(sectionTitle("Done (${done.size})", "Clear") {
             AlertDialog.Builder(this).setMessage("Remove all done tasks?")
                 .setPositiveButton("Remove") { _, _ -> done.forEach { Db.deleteTask(it.id) }; render() }
-                .setNegativeButton("Cancel", null).show()
+                .setNegativeButton("Cancel", null).showKb()
         })
         page.add(listCard(done.take(30).map { taskRow(it) { render() } }))
     }
@@ -261,5 +261,5 @@ private fun MainActivity.editTask(t: Task, onChanged: () -> Unit) {
     AlertDialog.Builder(this).setTitle("Task").setView(b)
         .setPositiveButton("Save") { _, _ -> Db.saveTask(t.copy(title = f.text.toString().trim().ifBlank { t.title }, due = due)); onChanged() }
         .setNeutralButton("Delete") { _, _ -> Db.deleteTask(t.id); onChanged() }
-        .setNegativeButton("Cancel", null).show()
+        .setNegativeButton("Cancel", null).showKb()
 }

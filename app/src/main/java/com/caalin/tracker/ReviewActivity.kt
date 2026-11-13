@@ -32,7 +32,7 @@ class ReviewActivity : BaseActivity() {
         box.removeAllViews()
         val t = queue.firstOrNull()
         if (t == null) {
-            toast(if (total > 0) "All payments have a category ✓" else "Nothing to categorise")
+            toast(if (total > 0) "All payments have a category ✔" else "Nothing to categorise")
             finish(); return
         }
         val done = total - queue.size

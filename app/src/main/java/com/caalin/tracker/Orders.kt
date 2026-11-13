@@ -90,7 +90,7 @@ class OrdersActivity : BaseActivity() {
         v.add(top)
         val r = hbox()
         r.add(text("Total ${money(m.total)}", 14f, true), 0, weight = 1f)
-        r.add(text(if (m.left > 0.009) "${if (o.kind == Order.BUY) "To pay" else "To collect"} ${money(m.left)}" else "Paid ✓", 13.5f, true,
+        r.add(text(if (m.left > 0.009) "${if (o.kind == Order.BUY) "To pay" else "To collect"} ${money(m.left)}" else "Paid ✔", 13.5f, true,
             if (m.left > 0.009) (if (o.kind == Order.BUY) RED else AMBER) else GREEN), WRAP)
         v.add(r, top = 10)
         if (m.total > 0) v.add(android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -130,7 +130,7 @@ fun editOrder(a: BaseActivity, o: Order?, kind: String, onSaved: (Long) -> Unit)
             onSaved(Db.saveOrder(base.copy(title = title.text.toString().trim(), party = party.text.toString().trim(),
                 phone = normalizePhone(phone.text.toString()), note = note.text.toString().trim(), due = due)))
         }
-        .setNegativeButton("Cancel", null).show()
+        .setNegativeButton("Cancel", null).showKb()
 }
 
 /** One order: status, items, shipments, money and linked payments. */
@@ -194,7 +194,7 @@ class OrderActivity : BaseActivity() {
             val f = field("Amount", InputType.TYPE_CLASS_PHONE)
             AlertDialog.Builder(this).setTitle("Payment").setView(vbox(20).apply { add(f) })
                 .setPositiveButton("Save") { _, _ -> Calc.eval(f.text.toString())?.let { Db.saveOrder(o.copy(paidManual = o.paidManual + it)); render() } }
-                .setNegativeButton("Cancel", null).show()
+                .setNegativeButton("Cancel", null).showKb()
         }, top = 12)
         mc.addView(mv)
         box.add(mc)
@@ -244,7 +244,7 @@ class OrderActivity : BaseActivity() {
             setOnClickListener {
                 AlertDialog.Builder(this@OrderActivity).setMessage("Delete this order? Linked payments stay in History.")
                     .setPositiveButton("Delete") { _, _ -> Db.deleteOrder(o.id); finish() }
-                    .setNegativeButton("Cancel", null).show()
+                    .setNegativeButton("Cancel", null).showKb()
             }
         })
     }
@@ -267,7 +267,7 @@ class OrderActivity : BaseActivity() {
                 render()
             }.setNegativeButton("Cancel", null)
         if (i != null) d.setNeutralButton("Delete") { _, _ -> Db.deleteItem(i.id); render() }
-        d.show()
+        d.showKb()
     }
 
     private fun editShipment(orderId: Long, s: Shipment?, n: Int) {
