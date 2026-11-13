@@ -33,6 +33,20 @@ class SendActivity : BaseActivity() {
     private var userPicked = false
     private lateinit var catHolder: android.widget.FrameLayout
     private lateinit var sendBtn: com.google.android.material.button.MaterialButton
+    private lateinit var sumHint: TextView
+    private val pickContact = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
+        val uri = r.data?.data ?: return@registerForActivityResult
+        try {
+            contentResolver.query(uri, arrayOf(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER,
+                android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    phone.setText(normalizePhone(c.getString(0) ?: ""))
+                    toast(c.getString(1) ?: "")
+                    amount.requestFocus()
+                }
+            }
+        } catch (e: Exception) { toast("Couldn't read that contact") }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,15 +79,34 @@ class SendActivity : BaseActivity() {
         val f = vbox(18)
         f.add(text("Amount", 13f, true, MUTED))
         amount = EditText(this).apply {
-            hint = "$0"; textSize = 36f; inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            hint = "$0"; textSize = 36f; inputType = InputType.TYPE_CLASS_PHONE
             background = null; setPadding(0, dp(4), 0, dp(4)); setTextColor(INK)
             typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
         }
-        f.add(amount)
+        val ar = hbox()
+        ar.add(amount, 0, weight = 1f)
+        ar.add(roundIcon(R.drawable.ic_calc) {
+            Calc.show(this, amount.text.toString()) { v -> amount.setText(amountText(v)); amount.setSelection(amount.text.length) }
+        }, dp(48), dp(48))
+        f.add(ar)
+        sumHint = text("", 14f, true, BRAND)
+        f.add(sumHint)
         f.add(View(this).apply { setBackgroundColor(LINE) }, MATCH, dp(1), top = 4)
+        val quick = hbox()
+        listOf(1, 5, 10, 20, 50, 100).forEach { q ->
+            quick.add(pill("$$q", false) { amount.setText(q.toString()); amount.setSelection(amount.text.length) }, WRAP, end = 6)
+        }
+        f.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 10)
         f.add(text("Phone number", 13f, true, MUTED), top = 16)
         phone = field("e.g. 617111194", InputType.TYPE_CLASS_PHONE)
-        f.add(phone, top = 6)
+        val pr = hbox()
+        pr.add(phone, 0, weight = 1f, end = 10)
+        pr.add(roundIcon(R.drawable.ic_contacts) {
+            try {
+                pickContact.launch(Intent(Intent.ACTION_PICK, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI))
+            } catch (e: Exception) { toast("No contacts app found") }
+        }, dp(48), dp(48))
+        f.add(pr, top = 6)
 
         val recents = Db.recentRecipients(w.id)
         if (recents.isNotEmpty()) {
@@ -143,11 +176,20 @@ class SendActivity : BaseActivity() {
         return android.graphics.Color.HSVToColor(hsv)
     }
 
-    private fun numberText() = phone.text.toString().filter { it.isDigit() || it == '+' }
-    private fun amountValue() = amount.text.toString().trim().toDoubleOrNull() ?: 0.0
+    private fun roundIcon(res: Int, onClick: () -> Unit): View = android.widget.FrameLayout(this).apply {
+        background = rounded(GREEN_BG, dp(14).toFloat())
+        addView(icon(res, BRAND, 22), android.widget.FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+        setOnClickListener { onClick() }
+    }
+
+    private fun numberText() = normalizePhone(phone.text.toString())
+    private fun amountValue() = Calc.eval(amount.text.toString().trim()) ?: 0.0
     private fun code() = Ussd.code(w.template, numberText(), amountText(amountValue()))
 
     private fun updatePreview() {
+        val raw = amount.text.toString()
+        sumHint.text = if (Calc.hasOperator(raw)) Calc.eval(raw)?.let { "= " + money(it) } ?: "…" else ""
+        sumHint.visibility = if (sumHint.text.isEmpty()) View.GONE else View.VISIBLE
         preview.text = "Dials  " + if (numberText().isNotEmpty() && amountValue() > 0) code() else w.template
     }
 

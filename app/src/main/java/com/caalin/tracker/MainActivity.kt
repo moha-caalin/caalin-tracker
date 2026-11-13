@@ -26,6 +26,10 @@ class MainActivity : BaseActivity() {
     private var histList: LinearLayout? = null
     var reportMonth = 0 // 0 = this month, -1 last month, ... ; 1 = all since start
     var reportAll = false
+    var notesDebts = false
+    private val scrollY = IntArray(5)
+    private var scroller: ScrollView? = null
+    private var shownTab = -1
     private lateinit var content: FrameLayout
     private lateinit var nav: LinearLayout
 
@@ -108,27 +112,34 @@ class MainActivity : BaseActivity() {
     }
 
     fun render() {
+        if (shownTab >= 0) scroller?.let { scrollY[shownTab] = it.scrollY }
         drawNav()
         content.removeAllViews()
         histList = null
-        val page = when (tab) { 0 -> home(); 1 -> history(); 2 -> reportsPage(); else -> settings() }
-        content.addView(ScrollView(this).apply { isFillViewport = true; addView(page) })
+        val page = when (tab) { 0 -> home(); 1 -> history(); 2 -> reportsPage(); 3 -> notesPage(); else -> settings() }
+        val sv = ScrollView(this).apply { isFillViewport = true; addView(page) }
+        content.addView(sv)
+        scroller = sv
+        val keep = if (shownTab == tab) scrollY[tab] else 0
+        shownTab = tab
+        sv.post { sv.scrollTo(0, keep) }
     }
 
     private fun drawNav() {
         nav.removeAllViews()
         listOf(Triple("Home", R.drawable.ic_home, 0), Triple("History", R.drawable.ic_list, 1),
-            Triple("Reports", R.drawable.ic_chart, 2), Triple("Settings", R.drawable.ic_tune, 3)).forEach { (label, res, i) ->
+            Triple("Reports", R.drawable.ic_chart, 2), Triple("Notes", R.drawable.ic_note, 3),
+            Triple("Settings", R.drawable.ic_tune, 4)).forEach { (label, res, i) ->
             val sel = tab == i
             val item = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
             val ic = icon(res, if (sel) BRAND else MUTED, 24)
             val holder = FrameLayout(this).apply {
-                setPadding(dp(14), dp(4), dp(14), dp(4))
+                setPadding(dp(12), dp(4), dp(12), dp(4))
                 background = if (sel) rounded(GREEN_BG, dp(16).toFloat()) else null
                 addView(ic)
             }
             item.add(holder, WRAP)
-            item.add(text(label, 12f, sel, if (sel) BRAND else MUTED), WRAP, top = 2)
+            item.add(text(label, 11.5f, sel, if (sel) BRAND else MUTED), WRAP, top = 2)
             item.setOnClickListener { tab = i; render() }
             nav.add(item, 0, weight = 1f)
         }
@@ -148,8 +159,11 @@ class MainActivity : BaseActivity() {
         }
         val top = hbox()
         val titles = vbox()
-        titles.add(text("Caalin Tracker", 22f, true, WHITE))
-        titles.add(text(dayText(System.currentTimeMillis()), 13f, color = 0xCCFFFFFF.toInt()), top = 2)
+        val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val hello = when (hr) { in 5..11 -> "Good morning"; in 12..16 -> "Good afternoon"; else -> "Good evening" }
+        titles.add(text("$hello 👋", 14f, color = 0xDDFFFFFF.toInt()))
+        titles.add(text("Caalin Tracker", 22f, true, WHITE), top = 2)
+        titles.add(text(dayText(System.currentTimeMillis()), 12.5f, color = 0xB3FFFFFF.toInt()), top = 2)
         top.add(titles, 0, weight = 1f)
         head.add(top)
 
@@ -180,7 +194,10 @@ class MainActivity : BaseActivity() {
         page.add(head)
 
         val body = vbox(16)
-        checklistCard(onlyProblems = true)?.let { body.add(it) }
+        body.add(quickActions())
+        checklistCard(onlyProblems = true)?.let { body.add(it, top = 12) }
+        focusCard()?.let { body.add(it, top = 12) }
+        debtCard()?.let { body.add(it, top = 12) }
         val needs = Db.uncategorized().size
         if (needs > 0) {
             val nc = card()
@@ -216,6 +233,75 @@ class MainActivity : BaseActivity() {
         else { val cats = Db.categoryMap(); body.add(listCard(recent.map { tx -> txRow(tx, cats) { showTx(tx) { render() } } })) }
         page.add(body)
         return page
+    }
+
+    private fun quickActions(): View {
+        val row = hbox()
+        fun action(label: String, res: Int, onClick: () -> Unit) {
+            val v = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
+            v.add(FrameLayout(this).apply {
+                background = rounded(WHITE, dp(18).toFloat(), dp(1), LINE)
+                addView(icon(res, BRAND, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+            }, dp(56), dp(56))
+            v.add(text(label, 12.5f, true, INK), WRAP, top = 6)
+            v.setOnClickListener { onClick() }
+            row.add(v, 0, weight = 1f)
+        }
+        action("Send", R.drawable.ic_send) {
+            val ready = Db.wallets().filter { it.template.isNotBlank() }
+            when (ready.size) {
+                0 -> { tab = 4; render() }
+                1 -> startActivity(Intent(this, SendActivity::class.java).putExtra("id", ready[0].id))
+                else -> AlertDialog.Builder(this).setTitle("Send with")
+                    .setItems(ready.map { it.name }.toTypedArray()) { _, i ->
+                        startActivity(Intent(this, SendActivity::class.java).putExtra("id", ready[i].id))
+                    }.show()
+            }
+        }
+        action("Calculator", R.drawable.ic_calc) { Calc.show(this) }
+        action("Notes", R.drawable.ic_note) { tab = 3; notesDebts = false; render() }
+        action("Focus", R.drawable.ic_focus) { startActivity(Intent(this, FocusActivity::class.java)) }
+        return row
+    }
+
+    private fun focusCard(): View? {
+        Focus.init(this)
+        if (!Focus.enabled) return null
+        val used = Focus.usedTodayMin()
+        val c = card()
+        val v = vbox(16)
+        val r = hbox()
+        r.add(text("⏳  Social apps today", 15f, true), 0, weight = 1f)
+        r.add(text("$used / ${Focus.limitMin} min", 14f, true, if (used >= Focus.limitMin) RED else BRAND), WRAP)
+        v.add(r)
+        v.add(android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = Focus.limitMin; progress = used.coerceAtMost(Focus.limitMin)
+        }, top = 8)
+        if (Focus.hoursOn && Focus.inFocusHours()) v.add(text("Focus hours until ${Focus.timeText(Focus.hoursEnd)}", 12.5f, color = MUTED), top = 4)
+        c.addView(v)
+        c.setOnClickListener { startActivity(Intent(this, FocusActivity::class.java)) }
+        return c
+    }
+
+    private fun debtCard(): View? {
+        val open = Db.debts().filter { !it.closed }
+        if (open.isEmpty()) return null
+        val them = open.filter { it.direction == Debt.THEY }.sumOf { it.left }
+        val me = open.filter { it.direction == Debt.ME }.sumOf { it.left }
+        val late = open.count { it.due != null && it.due < startOfDay() }
+        val c = card()
+        val r = hbox().apply { setPadding(dp(16), dp(14), dp(16), dp(14)) }
+        val m = vbox()
+        m.add(text("Debts", 15f, true))
+        m.add(text(if (late > 0) "$late overdue" else "${open.size} open", 12.5f, late > 0, if (late > 0) RED else MUTED), top = 2)
+        r.add(m, 0, weight = 1f)
+        val rv = vbox().apply { gravity = Gravity.END }
+        if (them > 0) rv.add(text("Owed to you ${money(them)}", 13.5f, true, GREEN), WRAP)
+        if (me > 0) rv.add(text("You owe ${money(me)}", 13.5f, true, RED), WRAP)
+        r.add(rv, WRAP)
+        c.addView(r)
+        c.setOnClickListener { tab = 3; notesDebts = true; render() }
+        return c
     }
 
     private fun walletTile(w: Wallet): View {
@@ -347,6 +433,24 @@ class MainActivity : BaseActivity() {
             startActivity(Intent(this, WalletEditActivity::class.java).putExtra("id", -1L))
         }, top = 10)
 
+        page.add(sectionTitle("Security & focus"))
+        val sec = card()
+        val secv = vbox(16)
+        secv.add(text("Ask for fingerprint after", 15f, true))
+        val lk = hbox()
+        listOf(0 to "Immediately", 60 to "1 min", 300 to "5 min", 900 to "15 min").forEach { (sec2, l) ->
+            lk.add(pill(l, Prefs.lockAfterSec == sec2) { Prefs.lockAfterSec = sec2; render() }, WRAP, end = 6)
+        }
+        secv.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(lk) }, top = 8)
+        secv.add(text("Focus & screen time", 15f, true, BRAND).apply {
+            setPadding(0, dp(18), 0, dp(2))
+            setOnClickListener { startActivity(Intent(this@MainActivity, FocusActivity::class.java)) }
+        })
+        secv.add(text("Limit TikTok, Facebook, YouTube and more.", 12.5f, color = MUTED))
+        sec.addView(secv)
+        sec.setOnClickListener { }
+        page.add(sec)
+
         page.add(sectionTitle("Categories"))
         for ((dir, label) in listOf(OUT to "Money out", IN to "Money in")) {
             page.add(text(label, 13f, true, MUTED).apply { setPadding(dp(4), dp(4), 0, dp(6)) })
@@ -385,7 +489,7 @@ class MainActivity : BaseActivity() {
         sms.addView(sv)
         page.add(sms)
 
-        page.add(text("Caalin Tracker 1.2", 12f, color = MUTED).apply {
+        page.add(text("Caalin Tracker 1.3", 12f, color = MUTED).apply {
             gravity = Gravity.CENTER; setPadding(0, dp(24), 0, dp(8))
         })
         return page

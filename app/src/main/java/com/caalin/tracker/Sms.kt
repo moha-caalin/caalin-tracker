@@ -102,6 +102,7 @@ object SmsStore {
                 status = Status.COMPLETED, name = p.name.ifBlank { app.name }, phone = app.phone.ifBlank { p.phone },
                 balance = p.balance ?: app.balance, smsKey = key, response = (app.response + "\n\n" + text).trim(),
             ))
+            if (time >= Prefs.countFrom) Db.applyDebtPayment(app.phone.ifBlank { p.phone }, p.direction, p.amount, time)
             return true
         }
         // Same payment already recorded from another copy of the message (SMS vs. pop-up).
@@ -112,6 +113,7 @@ object SmsStore {
             amount = p.amount, status = Status.COMPLETED, response = text, createdAt = time, source = "SMS",
             balance = p.balance, smsKey = key, categoryId = Db.guessCategory(p.phone, p.direction),
         ))
+        if (time >= Prefs.countFrom) Db.applyDebtPayment(p.phone, p.direction, p.amount, time)
         return true
     }
 

@@ -9,6 +9,17 @@
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.PICK" />
+            <data android:mimeType="vnd.android.cursor.dir/phone_v2" />
+        </intent>
+    </queries>
+
     <application
         android:name=".App"
         android:allowBackup="false"
@@ -26,6 +37,14 @@
         </activity>
         <activity android:name=".SendActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".ReviewActivity" android:exported="false" />
+        <activity android:name=".FocusActivity" android:exported="false" />
+        <activity
+            android:name=".BlockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.caalin.tracker.block"
+            android:theme="@style/Theme.Caalin.NoBar" />
         <activity android:name=".WalletEditActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
 
         <provider

@@ -86,14 +86,13 @@ object PinVault {
 
 /** Locks the whole app when it has been in the background for more than a minute. */
 object AppLock : Application.ActivityLifecycleCallbacks {
-    private const val GRACE_MS = 60_000L
     var unlocked = false
     private var started = 0
     private var backgroundAt = 0L
 
     override fun onActivityStarted(activity: Activity) {
         started++
-        if (started == 1 && backgroundAt > 0 && System.currentTimeMillis() - backgroundAt > GRACE_MS) unlocked = false
+        if (started == 1 && backgroundAt > 0 && System.currentTimeMillis() - backgroundAt >= Prefs.lockAfterSec * 1000L) unlocked = false
     }
 
     override fun onActivityStopped(activity: Activity) {

@@ -354,3 +354,12 @@ class BarChart(ctx: Context, private val labels: List<String>, private val ins: 
         }
     }
 }
+
+/** Local number for USSD: drops spaces, a leading 0 and the 252 country code. */
+fun normalizePhone(s: String): String {
+    var d = s.filter { it.isDigit() }
+    if (d.startsWith("00252")) d = d.drop(5)
+    else if (d.startsWith("252") && d.length >= 12) d = d.drop(3)
+    if (d.startsWith("0") && d.length >= 10) d = d.drop(1)
+    return d
+}

@@ -68,6 +68,18 @@ object Status {
 
 data class Category(val id: Long, val name: String, val direction: String, val color: Int)
 
+data class Note(val id: Long = 0, val title: String, val body: String, val pinned: Boolean, val phone: String, val updated: Long)
+
+/** direction: THEY = they owe me, ME = I owe them. */
+data class Debt(
+    val id: Long = 0, val name: String, val phone: String, val direction: String, val amount: Double, val paid: Double = 0.0,
+    val due: Long? = null, val note: String = "", val created: Long = System.currentTimeMillis(), val closed: Boolean = false,
+    val history: String = "",
+) {
+    val left get() = (amount - paid).coerceAtLeast(0.0)
+    companion object { const val THEY = "THEY"; const val ME = "ME" }
+}
+
 object Prefs {
     private lateinit var sp: SharedPreferences
     fun init(ctx: Context) { if (!::sp.isInitialized) sp = ctx.getSharedPreferences("caalin", Context.MODE_PRIVATE) }
@@ -77,6 +89,11 @@ object Prefs {
         get() = sp.getLong("start", -1L)
         set(v) { sp.edit().putLong("start", v).apply() }
     val countFrom: Long get() = if (start < 0) 0L else start
+
+    /** How long the app may stay in the background before the fingerprint is asked again. */
+    var lockAfterSec: Int
+        get() = sp.getInt("lock_after", 60)
+        set(v) { sp.edit().putInt("lock_after", v).apply() }
 
     fun opening(walletId: Long): Double? =
         if (sp.contains("open_$walletId")) sp.getFloat("open_$walletId", 0f).toDouble() else null
@@ -91,7 +108,7 @@ object Defaults {
     const val FAIL = "khalad, qalad, ma haysatid, kuguma filna, kugu filnayn, ma guulaysan, guuldarr, failed, error, invalid, not valid, incorrect, wrong, insufficient"
 }
 
-class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 3) {
+class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 4) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE wallets(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color INTEGER NOT NULL, " +
@@ -105,6 +122,7 @@ class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 3) {
         )
         db.execSQL("CREATE INDEX idx_txs_key ON txs(sms_key)")
         v3(db)
+        v4(db)
         fun seed(name: String, color: Long, template: String, tag: String) {
             db.insert("wallets", null, ContentValues().apply {
                 put("name", name); put("color", color.toInt()); put("template", template); put("sim", 0)
@@ -135,6 +153,14 @@ class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 3) {
             db.execSQL("ALTER TABLE txs ADD COLUMN note TEXT")
             v3(db, tablesOnly = true)
         }
+        if (oldVersion < 4) v4(db)
+    }
+
+    private fun v4(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE notes(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, body TEXT, pinned INTEGER NOT NULL DEFAULT 0, " +
+            "phone TEXT, updated INTEGER)")
+        db.execSQL("CREATE TABLE debts(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT, direction TEXT, amount REAL, " +
+            "paid REAL NOT NULL DEFAULT 0, due INTEGER, note TEXT, created INTEGER, closed INTEGER NOT NULL DEFAULT 0, history TEXT)")
     }
 
     private fun v3(db: SQLiteDatabase, tablesOnly: Boolean = false) {
@@ -370,5 +396,66 @@ object Db {
             }
         }
         return null
+    }
+
+    // ----- notes -----
+    fun notes(): List<Note> = h.readableDatabase.rawQuery("SELECT * FROM notes ORDER BY pinned DESC, updated DESC", null).use { c ->
+        val out = ArrayList<Note>()
+        while (c.moveToNext()) out.add(Note(c.l("id"), c.s("title") ?: "", c.s("body") ?: "", c.l("pinned") == 1L, c.s("phone") ?: "", c.l("updated")))
+        out
+    }
+
+    fun saveNote(n: Note): Long {
+        val cv = ContentValues().apply {
+            put("title", n.title); put("body", n.body); put("pinned", if (n.pinned) 1 else 0); put("phone", n.phone)
+            put("updated", System.currentTimeMillis())
+        }
+        return if (n.id > 0) { h.writableDatabase.update("notes", cv, "id=?", arrayOf(n.id.toString())); n.id }
+        else h.writableDatabase.insert("notes", null, cv)
+    }
+
+    fun deleteNote(id: Long) { h.writableDatabase.delete("notes", "id=?", arrayOf(id.toString())) }
+
+    // ----- debts -----
+    private fun debt(c: Cursor) = Debt(
+        c.l("id"), c.s("name") ?: "", c.s("phone") ?: "", c.s("direction") ?: Debt.THEY,
+        c.getDouble(c.getColumnIndexOrThrow("amount")), c.getDouble(c.getColumnIndexOrThrow("paid")),
+        c.getColumnIndexOrThrow("due").let { if (c.isNull(it)) null else c.getLong(it) }, c.s("note") ?: "",
+        c.l("created"), c.l("closed") == 1L, c.s("history") ?: "",
+    )
+
+    fun debts(): List<Debt> = h.readableDatabase.rawQuery("SELECT * FROM debts ORDER BY closed ASC, COALESCE(due, created) ASC", null).use { c ->
+        val out = ArrayList<Debt>(); while (c.moveToNext()) out.add(debt(c)); out
+    }
+
+    fun saveDebt(d: Debt): Long {
+        val cv = ContentValues().apply {
+            put("name", d.name); put("phone", d.phone); put("direction", d.direction); put("amount", d.amount); put("paid", d.paid)
+            if (d.due == null) putNull("due") else put("due", d.due)
+            put("note", d.note); put("created", d.created); put("closed", if (d.closed) 1 else 0); put("history", d.history)
+        }
+        return if (d.id > 0) { h.writableDatabase.update("debts", cv, "id=?", arrayOf(d.id.toString())); d.id }
+        else h.writableDatabase.insert("debts", null, cv)
+    }
+
+    fun deleteDebt(id: Long) { h.writableDatabase.delete("debts", "id=?", arrayOf(id.toString())) }
+
+    /** Money from/to a person reduces their open debts, oldest first. Returns the amount applied. */
+    fun applyDebtPayment(phone: String, txDirection: String, amount: Double, time: Long): Double {
+        val p = last9(phone)
+        if (p.isEmpty()) return 0.0
+        val dir = if (txDirection == IN) Debt.THEY else Debt.ME
+        var rest = amount
+        var applied = 0.0
+        for (d in debts().filter { !it.closed && it.direction == dir && last9(it.phone) == p }.sortedBy { it.created }) {
+            if (rest <= 0.0001) break
+            val use = minOf(rest, d.left)
+            if (use <= 0) continue
+            val paid = d.paid + use
+            val line = java.text.SimpleDateFormat("d MMM", java.util.Locale.US).format(java.util.Date(time)) + ": " + money(use) + " by SMS"
+            saveDebt(d.copy(paid = paid, closed = paid >= d.amount - 0.0001, history = (d.history + "\n" + line).trim()))
+            rest -= use; applied += use
+        }
+        return applied
     }
 }

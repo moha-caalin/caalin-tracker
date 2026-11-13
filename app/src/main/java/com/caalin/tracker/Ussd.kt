@@ -108,10 +108,35 @@ class UssdService : AccessibilityService() {
     private val positiveWords = listOf("send", "reply", "submit", "ok", "yes", "confirm", "continue", "dir", "gudbi", "haa")
     private val dismissWords = listOf("ok", "close", "dismiss", "cancel", "xir", "done")
 
+    private val tick = object : Runnable {
+        override fun run() {
+            Focus.flush(this@UssdService)
+            Focus.check(this@UssdService)
+            h.postDelayed(this, 20_000L)
+        }
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        Db.init(this)
+        Focus.init(this)
+        h.removeCallbacks(tick)
+        h.postDelayed(tick, 20_000L)
+    }
+
+    override fun onDestroy() {
+        h.removeCallbacks(tick)
+        super.onDestroy()
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: ""
+        val stateChange = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        if (stateChange && pkg.isNotEmpty()) Focus.onWindow(this, pkg, event.className?.toString() ?: "")
         if (pkg == packageName) return
+        // Outside a send only new pop-ups matter; skip the constant content changes of other apps (saves battery).
+        if (!Pending.active && !stateChange) return
         val root = rootInActiveWindow ?: event.source ?: return
 
         val texts = ArrayList<String>()
