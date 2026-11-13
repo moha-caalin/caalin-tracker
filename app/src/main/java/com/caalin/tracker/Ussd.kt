@@ -44,14 +44,16 @@ object Pending {
     val transcript = StringBuilder()
     var lastText = ""
     var lastResult: SendResult? = null
+    var categoryId: Long? = null
 
-    fun start(w: Wallet, phone: String, amount: Double, pin: String) {
+    fun start(w: Wallet, phone: String, amount: Double, pin: String, category: Long?) {
         clear()
         session++
         walletId = w.id; walletName = w.name; this.phone = phone; this.amount = amount; this.pin = pin
         rules = w.ruleList(); success = w.successList(); fail = w.failList()
         armed = !w.hasPinRule()
         typedByHand = false
+        categoryId = category
         active = true
         val s = session
         handler.postDelayed({ if (active && session == s) finish(Status.UNKNOWN) }, TIMEOUT_MS)
@@ -64,6 +66,7 @@ object Pending {
         Db.addTx(Tx(
             walletId = walletId, walletName = walletName, direction = OUT, phone = phone, name = "", amount = amount,
             status = status, response = text, createdAt = System.currentTimeMillis(), source = "APP",
+            categoryId = categoryId,
         ))
         lastResult = SendResult(status, walletName, amount, phone,
             if (typedByHand) "The app couldn't type the PIN on this screen, so you typed it." else "")
@@ -88,9 +91,11 @@ object Manual {
     var amount = 0.0
     var dialed = false
     var at = 0L
+    var categoryId: Long? = null
 
-    fun set(w: Wallet, phone: String, amount: Double) {
+    fun set(w: Wallet, phone: String, amount: Double, category: Long?) {
         wallet = w; this.phone = phone; this.amount = amount; dialed = true; at = System.currentTimeMillis()
+        categoryId = category
     }
 
     fun clear() { wallet = null; dialed = false }

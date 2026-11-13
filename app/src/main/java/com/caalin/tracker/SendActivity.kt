@@ -29,6 +29,10 @@ class SendActivity : BaseActivity() {
     private lateinit var info: TextView
     private lateinit var infoBox: View
     private var afterPermission: (() -> Unit)? = null
+    private var categoryId: Long? = null
+    private var userPicked = false
+    private lateinit var catHolder: android.widget.FrameLayout
+    private lateinit var sendBtn: com.google.android.material.button.MaterialButton
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,6 +91,10 @@ class SendActivity : BaseActivity() {
             }
             f.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(chips) }, top = 6)
         }
+        f.add(text("Category", 13f, true, MUTED), top = 16)
+        catHolder = android.widget.FrameLayout(this)
+        f.add(catHolder, top = 6)
+        drawCats()
         preview = text("", 13f, color = MUTED)
         f.add(preview, top = 14)
         form.addView(f)
@@ -98,7 +106,8 @@ class SendActivity : BaseActivity() {
         infoBox = info2
         page.add(info2, top = 12)
 
-        page.add(button("Send with fingerprint") { send() }.apply {
+        sendBtn = button("Send with fingerprint") { send() }
+        page.add(sendBtn.apply {
             minHeight = dp(58); textSize = 17f
             setIconResource(R.drawable.ic_fingerprint); iconGravity = com.google.android.material.button.MaterialButton.ICON_GRAVITY_TEXT_START
         }, top = 14)
@@ -106,12 +115,27 @@ class SendActivity : BaseActivity() {
         val watcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun afterTextChanged(s: Editable?) = updatePreview()
+            override fun afterTextChanged(s: Editable?) {
+                updatePreview()
+                if (!userPicked) {
+                    val g = Db.guessCategory(numberText(), OUT)
+                    if (g != categoryId) { categoryId = g; drawCats() }
+                }
+            }
         }
         phone.addTextChangedListener(watcher)
         amount.addTextChangedListener(watcher)
         updatePreview()
         setContentView(ScrollView(this).apply { addView(page) })
+    }
+
+    private fun drawCats() {
+        catHolder.removeAllViews()
+        catHolder.addView(categoryChips(OUT, categoryId, { c ->
+            categoryId = if (categoryId == c.id) null else c.id; userPicked = true; drawCats()
+        }, {
+            askText("New expense category") { n -> categoryId = Db.addCategory(n, OUT); userPicked = true; drawCats() }
+        }))
     }
 
     private fun darker(c: Int): Int {
@@ -149,6 +173,26 @@ class SendActivity : BaseActivity() {
         if (p.length < 6) { phone.error = "Enter a valid number"; return }
         if (w.template.isBlank()) { toast("Add the USSD code for ${w.name} in Settings first"); return }
         if (Pending.active) { toast("Another send is still in progress"); return }
+        val cat = categoryId
+        if (cat == null) { toast("Choose a category first"); return }
+        val now = System.currentTimeMillis()
+        val dup = Db.near(w.id, OUT, a, now - 10 * 60_000L, now + 60_000L)
+            .filter { it.status != Status.FAILED && (it.phone.isEmpty() || last9(it.phone) == last9(p)) }
+            .maxByOrNull { it.createdAt }
+        if (dup != null) {
+            val mins = ((now - dup.createdAt) / 60_000L).coerceAtLeast(0)
+            AlertDialog.Builder(this)
+                .setTitle("Already sent?")
+                .setMessage("You sent ${money(a)} to ${dup.who} ${if (mins == 0L) "less than a minute" else "$mins min"} ago.\n\nSend the same amount again?")
+                .setPositiveButton("Send again") { _, _ -> doSend(p, a, cat) }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+        doSend(p, a, cat)
+    }
+
+    private fun doSend(p: String, a: Double, cat: Long) {
         val code = code()
         val subtitle = "${money(a)} to $p via ${w.name}"
 
@@ -170,12 +214,12 @@ class SendActivity : BaseActivity() {
                     } catch (e: Exception) {
                         toast("Could not unlock the PIN: ${e.message}"); return@ok
                     }
-                    withCallPermission { Pending.start(w, p, a, pin); dial(code) }
+                    withCallPermission { Pending.start(w, p, a, pin, cat); dial(code) }
                 },
                 onError = { _, msg -> toast(msg) })
         } else {
             Bio.prompt(this, "Confirm send", subtitle, null,
-                onOk = { withCallPermission { Manual.set(w, p, a); dial(code) } },
+                onOk = { withCallPermission { Manual.set(w, p, a, cat); dial(code) } },
                 onError = { _, msg -> toast(msg) })
         }
     }
@@ -211,6 +255,7 @@ class SendActivity : BaseActivity() {
         }
         try {
             startActivity(i)
+            sendBtn.isEnabled = false
         } catch (e: Exception) {
             Pending.clear(); Manual.clear()
             toast("Could not dial: ${e.message}")
@@ -224,46 +269,47 @@ class SendActivity : BaseActivity() {
 
     override fun onUnlockedResume() {
         refreshInfo()
+        sendBtn.isEnabled = !Pending.active
+        // A finished auto-PIN send: close this screen so nothing is sent twice; Home shows the result.
+        if (Pending.lastResult != null) { finish(); return }
         val m = Manual.wallet
         if (m != null && Manual.dialed) {
             val ph = Manual.phone
             val am = Manual.amount
             val at = Manual.at
+            val cat = Manual.categoryId
             Manual.clear()
             if (confirmedBySms(m, ph, am, at)) {
-                amount.setText("")
-                toast("Completed ✓ — confirmed by SMS")
-            } else {
-                fun save(status: String) {
-                    if (status == Status.COMPLETED && confirmedBySms(m, ph, am, at)) { toast("Completed ✓ — confirmed by SMS"); return }
-                    Db.addTx(Tx(walletId = m.id, walletName = m.name, direction = OUT, phone = ph, name = "", amount = am,
-                        status = status, response = "Confirmed by hand in the app.", createdAt = System.currentTimeMillis(), source = "APP"))
-                    if (status == Status.COMPLETED) amount.setText("")
-                    toast("Saved: ${statusLabel(status)}")
-                }
-                AlertDialog.Builder(this)
-                    .setTitle("Did it go through?")
-                    .setMessage("${money(am)} to $ph via ${m.name}")
-                    .setCancelable(false)
-                    .setPositiveButton("Yes, completed") { _, _ -> save(Status.COMPLETED) }
-                    .setNegativeButton("No, failed") { _, _ -> save(Status.FAILED) }
-                    .setNeutralButton("Not sure") { _, _ -> save(Status.UNKNOWN) }
-                    .show()
+                attachCategoryToSms(m, ph, am, at, cat)
+                Pending.lastResult = SendResult(Status.COMPLETED, m.name, am, ph, "Confirmed by SMS.")
+                finish(); return
             }
-        }
-        Pending.lastResult?.let { r ->
-            Pending.lastResult = null
-            if (r.status == Status.COMPLETED) amount.setText("")
-            val extra = when {
-                r.note.isNotEmpty() -> "\n\n" + r.note
-                r.status == Status.UNKNOWN -> "\n\nThe app couldn't read a clear success or failure message. Open History to see what the screen said."
-                else -> ""
+            fun save(status: String) {
+                if (status == Status.COMPLETED && confirmedBySms(m, ph, am, at)) {
+                    attachCategoryToSms(m, ph, am, at, cat)
+                } else {
+                    Db.addTx(Tx(walletId = m.id, walletName = m.name, direction = OUT, phone = ph, name = "", amount = am,
+                        status = status, response = "Confirmed by hand in the app.", createdAt = System.currentTimeMillis(),
+                        source = "APP", categoryId = cat))
+                }
+                Pending.lastResult = SendResult(status, m.name, am, ph)
+                finish()
             }
             AlertDialog.Builder(this)
-                .setTitle(if (r.status == Status.COMPLETED) "Sent ✓" else statusLabel(r.status))
-                .setMessage("${money(r.amount)} to ${r.phone} via ${r.walletName}\n\nSaved to History.$extra")
-                .setPositiveButton("OK", null)
+                .setTitle("Did it go through?")
+                .setMessage("${money(am)} to $ph via ${m.name}")
+                .setCancelable(false)
+                .setPositiveButton("Yes, completed") { _, _ -> save(Status.COMPLETED) }
+                .setNegativeButton("No, failed") { _, _ -> save(Status.FAILED) }
+                .setNeutralButton("Not sure") { _, _ -> save(Status.UNKNOWN) }
                 .show()
         }
+    }
+
+    private fun attachCategoryToSms(m: Wallet, ph: String, am: Double, since: Long, cat: Long?) {
+        if (cat == null) return
+        Db.near(m.id, OUT, am, since - 60_000L, System.currentTimeMillis() + 60_000L)
+            .firstOrNull { it.source == "SMS" && (it.phone.isEmpty() || last9(it.phone) == last9(ph)) }
+            ?.let { Db.setCategory(it.id, cat) }
     }
 }

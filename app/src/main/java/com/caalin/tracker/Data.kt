@@ -2,6 +2,7 @@ package com.caalin.tracker
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.SharedPreferences
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -52,7 +53,10 @@ data class Tx(
     val source: String,
     val balance: Double? = null,
     val smsKey: String? = null,
+    val categoryId: Long? = null,
+    val note: String = "",
 ) {
+    val counted get() = createdAt >= Prefs.countFrom
     val who get() = name.ifBlank { phone.ifBlank { walletName } }
 }
 
@@ -62,13 +66,32 @@ object Status {
     const val UNKNOWN = "UNKNOWN"
 }
 
+data class Category(val id: Long, val name: String, val direction: String, val color: Int)
+
+object Prefs {
+    private lateinit var sp: SharedPreferences
+    fun init(ctx: Context) { if (!::sp.isInitialized) sp = ctx.getSharedPreferences("caalin", Context.MODE_PRIVATE) }
+
+    /** When counting starts; -1 until the user has chosen. Older payments are kept but not counted. */
+    var start: Long
+        get() = sp.getLong("start", -1L)
+        set(v) { sp.edit().putLong("start", v).apply() }
+    val countFrom: Long get() = if (start < 0) 0L else start
+
+    fun opening(walletId: Long): Double? =
+        if (sp.contains("open_$walletId")) sp.getFloat("open_$walletId", 0f).toDouble() else null
+    fun setOpening(walletId: Long, v: Double?) {
+        if (v == null) sp.edit().remove("open_$walletId").apply() else sp.edit().putFloat("open_$walletId", v.toFloat()).apply()
+    }
+}
+
 object Defaults {
     const val PIN_RULES = "pin => {PIN}\nhaa => 1"
     const val SUCCESS = "uwareejisay, u wareejisay, ayaad u dirtay, waad u dirtay, waxaad u dirtay, haraagaagu, success, successful, sent"
     const val FAIL = "khalad, qalad, ma haysatid, kuguma filna, kugu filnayn, ma guulaysan, guuldarr, failed, error, invalid, not valid, incorrect, wrong, insufficient"
 }
 
-class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 2) {
+class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE wallets(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color INTEGER NOT NULL, " +
@@ -81,6 +104,7 @@ class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 2) {
                 "name TEXT, source TEXT NOT NULL DEFAULT 'APP', balance REAL, sms_key TEXT)"
         )
         db.execSQL("CREATE INDEX idx_txs_key ON txs(sms_key)")
+        v3(db)
         fun seed(name: String, color: Long, template: String, tag: String) {
             db.insert("wallets", null, ContentValues().apply {
                 put("name", name); put("color", color.toInt()); put("template", template); put("sim", 0)
@@ -106,6 +130,30 @@ class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 2) {
             db.execSQL("UPDATE wallets SET success_kw='uwareejisay, haraagaagu, ' || success_kw")
             db.execSQL("UPDATE wallets SET fail_kw=fail_kw || ', not valid'")
         }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE txs ADD COLUMN category_id INTEGER")
+            db.execSQL("ALTER TABLE txs ADD COLUMN note TEXT")
+            v3(db, tablesOnly = true)
+        }
+    }
+
+    private fun v3(db: SQLiteDatabase, tablesOnly: Boolean = false) {
+        if (!tablesOnly) {
+            // fresh install: txs already has the columns? add them here
+            db.execSQL("ALTER TABLE txs ADD COLUMN category_id INTEGER")
+            db.execSQL("ALTER TABLE txs ADD COLUMN note TEXT")
+        }
+        db.execSQL("CREATE TABLE categories(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, direction TEXT NOT NULL, color INTEGER NOT NULL)")
+        val outs = listOf("Stock purchase", "Freight / Shipping", "Rent", "Salary", "Airtime", "Personal", "Other")
+        val ins = listOf("Customer payment", "Loan returned", "Other")
+        var i = 0
+        fun add(n: String, d: String) {
+            db.insert("categories", null, ContentValues().apply {
+                put("name", n); put("direction", d); put("color", PALETTE[i % PALETTE.size]); i++
+            })
+        }
+        outs.forEach { add(it, OUT) }
+        ins.forEach { add(it, IN) }
     }
 }
 
@@ -114,6 +162,7 @@ object Db {
 
     fun init(ctx: Context) {
         if (!::h.isInitialized) h = DbHelper(ctx.applicationContext)
+        Prefs.init(ctx.applicationContext)
     }
 
     private fun Cursor.s(col: String): String? = getString(getColumnIndexOrThrow(col))
@@ -133,6 +182,8 @@ object Db {
             amount = c.getDouble(c.getColumnIndexOrThrow("amount")), status = c.s("status") ?: "",
             response = c.s("response") ?: "", createdAt = c.l("created_at"), source = c.s("source") ?: "APP",
             balance = if (c.isNull(bi)) null else c.getDouble(bi), smsKey = c.s("sms_key"),
+            categoryId = c.getColumnIndexOrThrow("category_id").let { if (c.isNull(it)) null else c.getLong(it) },
+            note = c.s("note") ?: "",
         )
     }
 
@@ -177,6 +228,8 @@ object Db {
         put("response", t.response); put("created_at", t.createdAt); put("source", t.source)
         if (t.balance == null) putNull("balance") else put("balance", t.balance)
         if (t.smsKey == null) putNull("sms_key") else put("sms_key", t.smsKey)
+        if (t.categoryId == null) putNull("category_id") else put("category_id", t.categoryId)
+        put("note", t.note)
     }
 
     fun addTx(t: Tx): Long = h.writableDatabase.insert("txs", null, cv(t))
@@ -203,7 +256,7 @@ object Db {
         val extra = if (walletId != null) " AND wallet_id=$walletId" else ""
         h.readableDatabase.rawQuery(
             "SELECT direction, COALESCE(SUM(amount),0) FROM txs WHERE status='COMPLETED' AND created_at>=?$extra GROUP BY direction",
-            arrayOf(since.toString())
+            arrayOf(maxOf(since, Prefs.countFrom).toString())
         ).use { c ->
             while (c.moveToNext()) {
                 if (c.getString(0) == IN) out[0] = c.getDouble(1) else out[1] = c.getDouble(1)
@@ -236,4 +289,86 @@ object Db {
                 "AND phone<>'' GROUP BY phone ORDER BY m DESC LIMIT 6",
             arrayOf(walletId.toString())
         ).use { c -> val out = ArrayList<Pair<String, String>>(); while (c.moveToNext()) out.add(c.getString(0) to (c.getString(1) ?: "")); out }
+
+    fun tx(id: Long): Tx? = txList("SELECT * FROM txs WHERE id=?", arrayOf(id.toString())).firstOrNull()
+
+    fun txsBetween(from: Long, to: Long): List<Tx> =
+        txList("SELECT * FROM txs WHERE created_at BETWEEN ? AND ? ORDER BY created_at DESC", arrayOf(from.toString(), to.toString()))
+
+    // ----- categories -----
+    private fun cat(c: Cursor) = Category(c.l("id"), c.s("name") ?: "", c.s("direction") ?: OUT, c.l("color").toInt())
+
+    fun categories(direction: String? = null): List<Category> {
+        val sql = if (direction == null) "SELECT * FROM categories ORDER BY direction DESC, id" else "SELECT * FROM categories WHERE direction=? ORDER BY id"
+        return h.readableDatabase.rawQuery(sql, if (direction == null) null else arrayOf(direction)).use { c ->
+            val out = ArrayList<Category>(); while (c.moveToNext()) out.add(cat(c)); out
+        }
+    }
+
+    fun categoryMap(): Map<Long, Category> = categories().associateBy { it.id }
+
+    fun addCategory(name: String, direction: String): Long {
+        val n = categories().size
+        return h.writableDatabase.insert("categories", null, ContentValues().apply {
+            put("name", name); put("direction", direction); put("color", PALETTE[n % PALETTE.size])
+        })
+    }
+
+    fun renameCategory(id: Long, name: String) {
+        h.writableDatabase.update("categories", ContentValues().apply { put("name", name) }, "id=?", arrayOf(id.toString()))
+    }
+
+    fun deleteCategory(id: Long) {
+        h.writableDatabase.execSQL("UPDATE txs SET category_id=NULL WHERE category_id=?", arrayOf<Any>(id))
+        h.writableDatabase.delete("categories", "id=?", arrayOf(id.toString()))
+    }
+
+    fun setCategory(txId: Long, catId: Long?) {
+        h.writableDatabase.update("txs", ContentValues().apply { if (catId == null) putNull("category_id") else put("category_id", catId) },
+            "id=?", arrayOf(txId.toString()))
+    }
+
+    fun setNote(txId: Long, note: String) {
+        h.writableDatabase.update("txs", ContentValues().apply { put("note", note) }, "id=?", arrayOf(txId.toString()))
+    }
+
+    /** The category last used for this person in this direction. */
+    fun guessCategory(phone: String, direction: String): Long? {
+        val p = last9(phone)
+        if (p.isEmpty()) return null
+        return h.readableDatabase.rawQuery(
+            "SELECT phone, category_id FROM txs WHERE direction=? AND category_id IS NOT NULL ORDER BY created_at DESC LIMIT 500",
+            arrayOf(direction)
+        ).use { c ->
+            var found: Long? = null
+            while (found == null && c.moveToNext()) if (last9(c.getString(0) ?: "") == p) found = c.getLong(1)
+            found
+        }
+    }
+
+    /** Counted, completed payments still without a category. */
+    fun uncategorized(): List<Tx> = txList(
+        "SELECT * FROM txs WHERE status='COMPLETED' AND category_id IS NULL AND created_at>=? ORDER BY created_at DESC",
+        arrayOf(Prefs.countFrom.toString())
+    )
+
+    /** Opening balance of a wallet at the counting start: saved value, or worked out from SMS balances. */
+    fun opening(walletId: Long): Double? {
+        Prefs.opening(walletId)?.let { return it }
+        val start = Prefs.countFrom.toString()
+        h.readableDatabase.rawQuery(
+            "SELECT balance FROM txs WHERE wallet_id=? AND balance IS NOT NULL AND created_at<? ORDER BY created_at DESC, id DESC LIMIT 1",
+            arrayOf(walletId.toString(), start)
+        ).use { if (it.moveToFirst()) return it.getDouble(0) }
+        h.readableDatabase.rawQuery(
+            "SELECT balance, amount, direction FROM txs WHERE wallet_id=? AND balance IS NOT NULL AND created_at>=? ORDER BY created_at ASC, id ASC LIMIT 1",
+            arrayOf(walletId.toString(), start)
+        ).use {
+            if (it.moveToFirst()) {
+                val b = it.getDouble(0); val a = it.getDouble(1)
+                return if (it.getString(2) == IN) b - a else b + a
+            }
+        }
+        return null
+    }
 }

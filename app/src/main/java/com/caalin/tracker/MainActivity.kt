@@ -14,12 +14,18 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import androidx.appcompat.app.AlertDialog
 
 class MainActivity : BaseActivity() {
-    private var tab = 0
+    var tab = 0
     private var period = 0 // 0 today, 1 month, 2 all
     private var histDir: String? = null
     private var histWallet: Long? = null
+    private var histNeeds = false
+    var histQuery = ""
+    private var histList: LinearLayout? = null
+    var reportMonth = 0 // 0 = this month, -1 last month, ... ; 1 = all since start
+    var reportAll = false
     private lateinit var content: FrameLayout
     private lateinit var nav: LinearLayout
 
@@ -44,6 +50,50 @@ class MainActivity : BaseActivity() {
     override fun onUnlockedResume() {
         render()
         if (!imported && SmsStore.canRead(this)) importSms(false)
+        if (Prefs.start < 0) askStart(first = true)
+        Pending.lastResult?.let { r ->
+            Pending.lastResult = null
+            val extra = when {
+                r.note.isNotEmpty() -> "\n\n" + r.note
+                r.status == Status.UNKNOWN -> "\n\nThe app couldn't read a clear answer. Check History, and mark it completed if it went through."
+                else -> ""
+            }
+            AlertDialog.Builder(this)
+                .setTitle(when (r.status) { Status.COMPLETED -> "Sent ✓"; Status.FAILED -> "Payment failed"; else -> "Not confirmed" })
+                .setMessage("${money(r.amount)} to ${r.phone} via ${r.walletName}$extra")
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
+    /** When counting starts: today with an opening balance, the last 90 days, or a chosen date. */
+    fun askStart(first: Boolean) {
+        val items = arrayOf(
+            "Start today — older messages become the opening balance",
+            "Count the last 90 days — I'll add categories to them",
+            "Pick a start date…",
+        )
+        AlertDialog.Builder(this)
+            .setTitle(if (first) "When should counting start?" else "Change start date")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> { Prefs.start = startOfDay(); render() }
+                    1 -> { Prefs.start = System.currentTimeMillis() - 90L * 24 * 3600_000L; render() }
+                    else -> {
+                        val c = java.util.Calendar.getInstance()
+                        android.app.DatePickerDialog(this, { _, y, m, d ->
+                            Prefs.start = java.util.Calendar.getInstance().apply {
+                                set(y, m, d, 0, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
+                            }.timeInMillis
+                            render()
+                        }, c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH), c.get(java.util.Calendar.DAY_OF_MONTH)).apply {
+                            setOnCancelListener { if (Prefs.start < 0) askStart(first) }
+                        }.show()
+                    }
+                }
+            }
+            .setCancelable(!first)
+            .show()
     }
 
     private fun importSms(showResult: Boolean) {
@@ -57,22 +107,23 @@ class MainActivity : BaseActivity() {
         }.start()
     }
 
-    private fun render() {
+    fun render() {
         drawNav()
         content.removeAllViews()
-        val page = when (tab) { 0 -> home(); 1 -> history(); else -> settings() }
+        histList = null
+        val page = when (tab) { 0 -> home(); 1 -> history(); 2 -> reportsPage(); else -> settings() }
         content.addView(ScrollView(this).apply { isFillViewport = true; addView(page) })
     }
 
     private fun drawNav() {
         nav.removeAllViews()
         listOf(Triple("Home", R.drawable.ic_home, 0), Triple("History", R.drawable.ic_list, 1),
-            Triple("Settings", R.drawable.ic_tune, 2)).forEach { (label, res, i) ->
+            Triple("Reports", R.drawable.ic_chart, 2), Triple("Settings", R.drawable.ic_tune, 3)).forEach { (label, res, i) ->
             val sel = tab == i
             val item = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
             val ic = icon(res, if (sel) BRAND else MUTED, 24)
             val holder = FrameLayout(this).apply {
-                setPadding(dp(18), dp(4), dp(18), dp(4))
+                setPadding(dp(14), dp(4), dp(14), dp(4))
                 background = if (sel) rounded(GREEN_BG, dp(16).toFloat()) else null
                 addView(ic)
             }
@@ -109,6 +160,7 @@ class MainActivity : BaseActivity() {
         head.add(pills, top = 16)
 
         val since = when (period) { 0 -> startOfDay(); 1 -> startOfMonth(); else -> 0L }
+        val sinceLabel = if (period == 2 && Prefs.start > 0) "Since ${dateText(Prefs.start).substringBefore(",")}" else null
         val t = Db.totals(null, since)
         val nums = hbox()
         fun col(label: String, value: String, iconRes: Int, tint: Int): View {
@@ -124,11 +176,29 @@ class MainActivity : BaseActivity() {
         nums.add(col("Sent", "−" + money(t[1]), R.drawable.ic_out, RED), 0, weight = 1f)
         head.add(nums, top = 18)
         val net = t[0] - t[1]
-        head.add(text("Net ${if (net < 0) "−" else "+"}${money(net)}", 14f, true, 0xEEFFFFFF.toInt()), top = 12)
+        head.add(text("Net ${if (net < 0) "−" else "+"}${money(net)}" + (sinceLabel?.let { "  ·  $it" } ?: ""), 14f, true, 0xEEFFFFFF.toInt()), top = 12)
         page.add(head)
 
         val body = vbox(16)
         checklistCard(onlyProblems = true)?.let { body.add(it) }
+        val needs = Db.uncategorized().size
+        if (needs > 0) {
+            val nc = card()
+            val r = hbox().apply { setPadding(dp(16), dp(14), dp(14), dp(14)) }
+            r.add(text("🏷", 22f), WRAP, end = 12)
+            val m = vbox()
+            m.add(text("$needs payment${if (needs == 1) "" else "s"} need a category", 15f, true))
+            m.add(text("Tap to go through them quickly", 12.5f, color = MUTED), top = 2)
+            r.add(m, 0, weight = 1f)
+            r.add(text("Review", 14f, true, WHITE).apply {
+                setPadding(dp(14), dp(8), dp(14), dp(8)); background = rounded(AMBER, dp(18).toFloat())
+            }, WRAP)
+            nc.addView(r)
+            nc.setCardBackgroundColor(AMBER_BG)
+            nc.strokeColor = 0x33C77700
+            nc.setOnClickListener { startActivity(Intent(this, ReviewActivity::class.java)) }
+            body.add(nc, top = if (body.childCount > 0) 12 else 0)
+        }
 
         body.add(sectionTitle("Send money"))
         val wallets = Db.wallets()
@@ -143,7 +213,7 @@ class MainActivity : BaseActivity() {
         body.add(sectionTitle("Recent activity", "See all") { tab = 1; render() })
         val recent = Db.txs(null, null, 6)
         if (recent.isEmpty()) body.add(emptyCard("No transactions yet. Money you send or receive shows up here."))
-        else body.add(listCard(recent.map { tx -> txRow(tx) { showTx(tx) { render() } } }))
+        else { val cats = Db.categoryMap(); body.add(listCard(recent.map { tx -> txRow(tx, cats) { showTx(tx) { render() } } })) }
         page.add(body)
         return page
     }
@@ -172,7 +242,7 @@ class MainActivity : BaseActivity() {
         return c
     }
 
-    private fun emptyCard(msg: String): View = card().apply {
+    fun emptyCard(msg: String): View = card().apply {
         addView(text(msg, 14f, color = MUTED).apply { setPadding(dp(18), dp(22), dp(18), dp(22)); gravity = Gravity.CENTER })
     }
 
@@ -182,11 +252,20 @@ class MainActivity : BaseActivity() {
         val page = vbox(16)
         page.add(text("History", 28f, true).apply { setPadding(dp(4), dp(8), 0, dp(12)) })
 
+        val search = field("Search name, number or note", android.text.InputType.TYPE_CLASS_TEXT, histQuery)
+        search.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(e: android.text.Editable?) { histQuery = e.toString(); fillHistory() }
+        })
+        page.add(search)
+
         val dirs = hbox()
-        listOf<Pair<String, String?>>("All" to null, "Received" to IN, "Sent" to OUT).forEach { (label, d) ->
-            dirs.add(pill(label, histDir == d) { histDir = d; render() }, WRAP, end = 8)
-        }
-        page.add(dirs)
+        dirs.add(pill("All", histDir == null && !histNeeds) { histDir = null; histNeeds = false; render() }, WRAP, end = 8)
+        dirs.add(pill("Received", histDir == IN && !histNeeds) { histDir = IN; histNeeds = false; render() }, WRAP, end = 8)
+        dirs.add(pill("Sent", histDir == OUT && !histNeeds) { histDir = OUT; histNeeds = false; render() }, WRAP, end = 8)
+        dirs.add(pill("Needs category", histNeeds) { histNeeds = !histNeeds; histDir = null; render() }, WRAP, end = 8)
+        page.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(dirs) }, top = 12)
 
         val wallets = Db.wallets()
         if (wallets.size > 1) {
@@ -195,9 +274,24 @@ class MainActivity : BaseActivity() {
             wallets.forEach { w -> wr.add(pill(w.name, histWallet == w.id) { histWallet = w.id; render() }, WRAP, end = 8) }
             page.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(wr) }, top = 10)
         }
+        val list = vbox()
+        histList = list
+        page.add(list)
+        fillHistory()
+        return page
+    }
 
-        val txs = Db.txs(histWallet, histDir)
-        val done = txs.filter { it.status == Status.COMPLETED }
+    private fun fillHistory() {
+        val list = histList ?: return
+        list.removeAllViews()
+        val q = histQuery.trim().lowercase()
+        val cats = Db.categoryMap()
+        val txs = (if (histNeeds) Db.uncategorized().filter { histWallet == null || it.walletId == histWallet }
+            else Db.txs(histWallet, histDir, 2000)).filter { t ->
+            q.isEmpty() || t.name.lowercase().contains(q) || t.phone.contains(q) || t.note.lowercase().contains(q) ||
+                (t.categoryId?.let { cats[it]?.name?.lowercase()?.contains(q) } ?: false)
+        }
+        val done = txs.filter { it.status == Status.COMPLETED && it.counted }
         val inn = done.filter { it.direction == IN }.sumOf { it.amount }
         val out = done.filter { it.direction == OUT }.sumOf { it.amount }
         val sum = card()
@@ -212,16 +306,18 @@ class MainActivity : BaseActivity() {
         val net = inn - out
         s.add(stat("Net", (if (net < 0) "−" else "+") + money(net), INK), 0, weight = 1f)
         sum.addView(s)
-        page.add(sum, top = 14)
+        list.add(sum, top = 14)
 
-        val notDone = txs.count { it.status != Status.COMPLETED }
-        if (notDone > 0) page.add(text("$notDone not confirmed or failed — not counted in totals.", 12.5f, color = MUTED)
+        val notCounted = txs.count { it.status != Status.COMPLETED || !it.counted }
+        if (notCounted > 0) list.add(text("$notCounted failed, not confirmed or before start — not in totals.", 12.5f, color = MUTED)
             .apply { setPadding(dp(4), dp(8), 0, 0) })
+        if (histNeeds && txs.isNotEmpty()) list.add(button("Go through them one by one") {
+            startActivity(Intent(this, ReviewActivity::class.java))
+        }, top = 10)
 
-        page.add(View(this), MATCH, dp(12))
-        if (txs.isEmpty()) page.add(emptyCard("Nothing here yet."))
-        else page.add(listCard(txs.map { tx -> txRow(tx) { showTx(tx) { render() } } }))
-        return page
+        list.add(View(this), MATCH, dp(12))
+        if (txs.isEmpty()) list.add(emptyCard(if (q.isNotEmpty()) "No matches." else "Nothing here yet."))
+        else list.add(listCard(txs.take(400).map { tx -> txRow(tx, cats) { showTx(tx) { fillHistory() } } }))
     }
 
     // ---------------- Settings ----------------
@@ -251,6 +347,33 @@ class MainActivity : BaseActivity() {
             startActivity(Intent(this, WalletEditActivity::class.java).putExtra("id", -1L))
         }, top = 10)
 
+        page.add(sectionTitle("Categories"))
+        for ((dir, label) in listOf(OUT to "Money out", IN to "Money in")) {
+            page.add(text(label, 13f, true, MUTED).apply { setPadding(dp(4), dp(4), 0, dp(6)) })
+            val cr = Db.categories(dir).map { c ->
+                val r = hbox().apply { setPadding(dp(16), dp(12), dp(14), dp(12)) }
+                r.addView(dot(c.color, 14))
+                r.add(text(c.name, 15f), 0, weight = 1f)
+                r.add(text("Edit", 14f, true, BRAND), WRAP)
+                r.setOnClickListener { editCategory(c) }
+                r as View
+            }
+            page.add(listCard(cr))
+            page.add(text("+ Add ${label.lowercase()} category", 14f, true, BRAND).apply {
+                setPadding(dp(4), dp(10), 0, dp(10))
+                setOnClickListener { askText("New category") { n -> Db.addCategory(n, dir); render() } }
+            })
+        }
+
+        page.add(sectionTitle("Counting"))
+        val st = card()
+        val sv2 = vbox(16)
+        sv2.add(text(if (Prefs.start > 0) "Counting since ${dayText(Prefs.start)}" else "Counting everything", 15f, true))
+        sv2.add(text("Payments before this date are kept in History but not counted. Your balance at that date is the opening balance (Reports › Balance check).", 13f, color = MUTED), top = 4)
+        sv2.add(button("Change start date", outlined = true) { askStart(first = false) }, top = 10)
+        st.addView(sv2)
+        page.add(st)
+
         page.add(sectionTitle("Messages"))
         val sms = card()
         val sv = vbox(16)
@@ -262,10 +385,20 @@ class MainActivity : BaseActivity() {
         sms.addView(sv)
         page.add(sms)
 
-        page.add(text("Caalin Tracker 1.1", 12f, color = MUTED).apply {
+        page.add(text("Caalin Tracker 1.2", 12f, color = MUTED).apply {
             gravity = Gravity.CENTER; setPadding(0, dp(24), 0, dp(8))
         })
         return page
+    }
+
+    private fun editCategory(c: Category) {
+        AlertDialog.Builder(this).setTitle(c.name)
+            .setItems(arrayOf("Rename", "Delete")) { _, i ->
+                if (i == 0) askText("Rename category", c.name) { n -> Db.renameCategory(c.id, n); render() }
+                else AlertDialog.Builder(this).setMessage("Delete \"${c.name}\"? Its payments will need a category again.")
+                    .setPositiveButton("Delete") { _, _ -> Db.deleteCategory(c.id); render() }
+                    .setNegativeButton("Cancel", null).show()
+            }.show()
     }
 
     // ---------------- Setup checklist ----------------

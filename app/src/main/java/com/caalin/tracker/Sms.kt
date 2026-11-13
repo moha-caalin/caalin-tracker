@@ -98,6 +98,7 @@ object SmsStore {
         val app = candidates.firstOrNull { it.source == "APP" && it.smsKey == null && samePerson(it) }
         if (app != null) {
             Db.updateTx(app.copy(
+                categoryId = app.categoryId ?: Db.guessCategory(p.phone, p.direction),
                 status = Status.COMPLETED, name = p.name.ifBlank { app.name }, phone = app.phone.ifBlank { p.phone },
                 balance = p.balance ?: app.balance, smsKey = key, response = (app.response + "\n\n" + text).trim(),
             ))
@@ -109,7 +110,7 @@ object SmsStore {
         Db.addTx(Tx(
             walletId = w.id, walletName = w.name, direction = p.direction, phone = p.phone, name = p.name,
             amount = p.amount, status = Status.COMPLETED, response = text, createdAt = time, source = "SMS",
-            balance = p.balance, smsKey = key,
+            balance = p.balance, smsKey = key, categoryId = Db.guessCategory(p.phone, p.direction),
         ))
         return true
     }

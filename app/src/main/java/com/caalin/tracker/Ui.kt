@@ -178,15 +178,30 @@ fun statusColor(s: String) = when (s) {
 
 fun Context.toast(s: CharSequence) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
-fun Context.txRow(t: Tx, onClick: () -> Unit): View {
+fun Context.txRow(t: Tx, cats: Map<Long, Category>, onClick: () -> Unit): View {
     val incoming = t.direction == IN
     val row = hbox().apply { setPadding(dp(14), dp(12), dp(14), dp(12)) }
+    if (!t.counted) row.alpha = 0.55f
     row.add(badge(if (incoming) GREEN_BG else RED_BG, 42, if (incoming) R.drawable.ic_in else R.drawable.ic_out,
         if (incoming) GREEN else RED), dp(42), dp(42), end = 12)
     val mid = vbox()
     mid.add(text(t.who, 15f, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
-    val sub = (if (incoming) "Received" else "Sent") + " · ${t.walletName} · ${dateText(t.createdAt)}"
-    mid.add(text(sub, 12.5f, color = MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, top = 2)
+    val cat = t.categoryId?.let { cats[it] }
+    val tag = hbox()
+    when {
+        !t.counted -> tag.add(text("Before start", 11.5f, true, MUTED), WRAP, end = 6)
+        cat != null -> tag.add(text(cat.name, 11.5f, true, cat.color).apply {
+            setPadding(dp(8), dp(2), dp(8), dp(2)); background = rounded((cat.color and 0x00FFFFFF) or 0x1F000000, dp(8).toFloat())
+        }, WRAP, end = 6)
+        t.status == Status.COMPLETED -> tag.add(text("Needs category", 11.5f, true, AMBER).apply {
+            setPadding(dp(8), dp(2), dp(8), dp(2)); background = rounded(AMBER_BG, dp(8).toFloat())
+        }, WRAP, end = 6)
+    }
+    tag.add(text("${t.walletName} · ${dateText(t.createdAt)}", 12f, color = MUTED).apply {
+        maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+    }, 0, weight = 1f)
+    mid.add(tag, top = 3)
+    if (t.note.isNotBlank()) mid.add(text("📝 " + t.note, 12f, color = MUTED).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, top = 2)
     row.add(mid, 0, weight = 1f)
     val right = vbox().apply { gravity = Gravity.END }
     val done = t.status == Status.COMPLETED
@@ -200,6 +215,40 @@ fun Context.txRow(t: Tx, onClick: () -> Unit): View {
         getDrawable(tv.resourceId)
     }
     return row
+}
+
+/** Wrapping row of category chips. */
+fun Context.categoryChips(direction: String, selected: Long?, onPick: (Category) -> Unit, onNew: (() -> Unit)? = null): View {
+    val flow = com.google.android.material.chip.ChipGroup(this)
+    flow.chipSpacingHorizontal = dp(8)
+    flow.chipSpacingVertical = dp(4)
+    for (c in Db.categories(direction)) {
+        val chip = com.google.android.material.chip.Chip(this)
+        chip.text = c.name
+        chip.isCheckable = true
+        chip.isChecked = c.id == selected
+        chip.chipBackgroundColor = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()), intArrayOf(c.color, 0xFFF1F4F2.toInt()))
+        chip.setTextColor(ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()), intArrayOf(WHITE, INK)))
+        chip.isCheckedIconVisible = false
+        chip.setOnClickListener { onPick(c) }
+        flow.addView(chip)
+    }
+    if (onNew != null) {
+        val add = com.google.android.material.chip.Chip(this)
+        add.text = "+ New"
+        add.setOnClickListener { onNew() }
+        flow.addView(add)
+    }
+    return flow
+}
+
+fun Context.askText(title: String, value: String = "", hint: String = "", onOk: (String) -> Unit) {
+    val f = field(hint, android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, value)
+    val box = vbox(20).apply { add(f) }
+    AlertDialog.Builder(this).setTitle(title).setView(box)
+        .setPositiveButton("Save") { _, _ -> f.text.toString().trim().takeIf { it.isNotEmpty() }?.let(onOk) }
+        .setNegativeButton("Cancel", null).show()
 }
 
 /** A white card holding a list of rows separated by thin lines. */
@@ -216,16 +265,39 @@ fun Context.listCard(rows: List<View>): View {
     return c
 }
 
-fun AppCompatActivity.showTx(t: Tx, onChanged: () -> Unit) {
+fun AppCompatActivity.showTx(t0: Tx, onChanged: () -> Unit) {
+    var t = Db.tx(t0.id) ?: t0
     val incoming = t.direction == IN
     val body = vbox(22)
     body.add(text(if (incoming) "Received" else "Sent", 14f, true, if (incoming) GREEN else RED))
     body.add(text((if (incoming) "+" else "−") + money(t.amount), 30f, true), top = 2)
     body.add(text(t.who + if (t.name.isNotBlank() && t.phone.isNotBlank()) "  (${t.phone})" else "", 15f), top = 6)
     body.add(text("${t.walletName} · ${dateText(t.createdAt)}", 13f, color = MUTED), top = 2)
-    body.add(text(statusLabel(t.status) + if (t.source == "SMS") " · from SMS" else " · sent from app", 13f, true,
-        statusColor(t.status)), top = 8)
+    body.add(text(statusLabel(t.status) + (if (t.source == "SMS") " · from SMS" else " · sent from app") +
+        (if (!t.counted) " · before start (not counted)" else ""), 13f, true, statusColor(t.status)), top = 8)
     t.balance?.let { body.add(text("Balance after: ${money(it)}", 13f, color = MUTED), top = 4) }
+
+    body.add(text("Category", 13f, true, MUTED), top = 16)
+    val chipsHolder = android.widget.FrameLayout(this)
+    body.add(chipsHolder, top = 6)
+    lateinit var draw: () -> Unit
+    draw = {
+        chipsHolder.removeAllViews()
+        chipsHolder.addView(categoryChips(t.direction, t.categoryId, { c ->
+            val newId = if (t.categoryId == c.id) null else c.id
+            Db.setCategory(t.id, newId); t = t.copy(categoryId = newId); draw()
+        }, {
+            askText("New ${if (incoming) "income" else "expense"} category") { n ->
+                val id = Db.addCategory(n, t.direction); Db.setCategory(t.id, id); t = t.copy(categoryId = id); draw()
+            }
+        }))
+    }
+    draw()
+
+    body.add(text("Note", 13f, true, MUTED), top = 14)
+    val note = field("Add a note", android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, t.note)
+    body.add(note, top = 6)
+
     body.add(text("Message", 13f, true, MUTED), top = 16)
     body.add(text(t.response, 13f).apply {
         setTextIsSelectable(true)
@@ -234,14 +306,51 @@ fun AppCompatActivity.showTx(t: Tx, onChanged: () -> Unit) {
     }, top = 6)
     val b = AlertDialog.Builder(this)
         .setView(android.widget.ScrollView(this).apply { addView(body) })
-        .setPositiveButton("Close", null)
+        .setPositiveButton("Done", null)
         .setNeutralButton("Delete") { _, _ ->
             AlertDialog.Builder(this).setMessage("Delete this transaction?")
                 .setPositiveButton("Delete") { _, _ -> Db.deleteTx(t.id); onChanged() }
                 .setNegativeButton("Cancel", null).show()
         }
     if (t.status != Status.COMPLETED) {
-        b.setNegativeButton("Mark completed") { _, _ -> Db.updateTx(t.copy(status = Status.COMPLETED)); onChanged() }
+        b.setNegativeButton("Mark completed") { _, _ -> Db.updateTx((Db.tx(t.id) ?: t).copy(status = Status.COMPLETED)) }
+    }
+    b.setOnDismissListener {
+        val n = note.text.toString().trim()
+        if (n != t0.note) Db.setNote(t.id, n)
+        onChanged()
     }
     b.show()
+}
+
+/** Simple paired bar chart: green = in, red = out. */
+class BarChart(ctx: Context, private val labels: List<String>, private val ins: List<Double>, private val outs: List<Double>) : View(ctx) {
+    private val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val d = ctx.resources.displayMetrics.density
+
+    override fun onDraw(c: android.graphics.Canvas) {
+        super.onDraw(c)
+        val n = labels.size
+        if (n == 0) return
+        val bottom = height - 18 * d
+        val max = (ins + outs).maxOrNull()?.takeIf { it > 0 } ?: 1.0
+        val slot = width.toFloat() / n
+        val bw = (slot * 0.34f).coerceAtMost(14 * d)
+        p.color = LINE
+        c.drawRect(0f, bottom, width.toFloat(), bottom + d, p)
+        for (i in 0 until n) {
+            val cx = slot * i + slot / 2
+            val hi = ((ins[i] / max) * (bottom - 6 * d)).toFloat()
+            val ho = ((outs[i] / max) * (bottom - 6 * d)).toFloat()
+            p.color = GREEN
+            c.drawRoundRect(cx - bw - d, bottom - hi, cx - d, bottom, 3 * d, 3 * d, p)
+            p.color = RED
+            c.drawRoundRect(cx + d, bottom - ho, cx + bw + d, bottom, 3 * d, 3 * d, p)
+            val every = if (n > 10) 5 else 1
+            if (i % every == 0 || i == n - 1) {
+                p.color = MUTED; p.textSize = 10 * d; p.textAlign = android.graphics.Paint.Align.CENTER
+                c.drawText(labels[i], cx, height - 4 * d, p)
+            }
+        }
+    }
 }
