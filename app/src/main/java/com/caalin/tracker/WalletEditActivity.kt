@@ -23,6 +23,7 @@ class WalletEditActivity : BaseActivity() {
     private lateinit var rules: EditText
     private lateinit var success: EditText
     private lateinit var fail: EditText
+    private lateinit var smsTag: EditText
     private lateinit var pinStatus: TextView
     private lateinit var colors: LinearLayout
 
@@ -34,7 +35,7 @@ class WalletEditActivity : BaseActivity() {
         if (w != null) color = w.color
         title = if (w == null) "New money type" else "Edit ${w.name}"
 
-        val box = vbox(12)
+        val box = vbox(16)
 
         // Basics
         val basic = vbox(16)
@@ -55,7 +56,7 @@ class WalletEditActivity : BaseActivity() {
             listOf("Ask / phone default", "SIM 1", "SIM 2"))
         sim.setSelection((w?.sim ?: 0).coerceIn(0, 2))
         basic.add(sim)
-        box.add(card().apply { addView(basic) })
+        box.add(card().apply { addView(basic) }, top = 4)
 
         // PIN
         val pin = vbox(16)
@@ -68,7 +69,7 @@ class WalletEditActivity : BaseActivity() {
         pinButtons.add(View(this), dp(8))
         pinButtons.add(button("Remove PIN", outlined = true) { removePin() }, 0, weight = 1f)
         pin.add(pinButtons, top = 8)
-        box.add(card().apply { addView(pin) })
+        box.add(card().apply { addView(pin) }, top = 12)
 
         // Advanced
         val adv = vbox(16)
@@ -82,8 +83,11 @@ class WalletEditActivity : BaseActivity() {
         adv.add(text("Failure words (comma separated)", 13f, true, MUTED), top = 12)
         fail = field("", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE, w?.failKw ?: Defaults.FAIL)
         adv.add(fail)
+        adv.add(text("SMS name (word in this wallet's messages)", 13f, true, MUTED), top = 12)
+        smsTag = field("e.g. evcplus", InputType.TYPE_CLASS_TEXT, w?.smsTag ?: "")
+        adv.add(smsTag)
         adv.add(text("Tip: after a test send, open it in History to see exactly what the USSD screens said, and copy words from there.", 12f, color = MUTED), top = 8)
-        box.add(card().apply { addView(adv) })
+        box.add(card().apply { addView(adv) }, top = 12)
 
         box.add(button("Save") { if (save() > 0) finish() }.apply { minHeight = dp(54) }, top = 8)
         if (w != null) {
@@ -128,7 +132,8 @@ class WalletEditActivity : BaseActivity() {
         }
         val old = if (id > 0) Db.wallet(id) else null
         id = Db.saveWallet(Wallet(id, n, color, t, sim.selectedItemPosition, old?.pinEnc, old?.pinIv,
-            rules.text.toString().trim(), success.text.toString().trim(), fail.text.toString().trim()))
+            rules.text.toString().trim(), success.text.toString().trim(), fail.text.toString().trim(),
+            smsTag.text.toString().trim()))
         title = "Edit $n"
         return id
     }
