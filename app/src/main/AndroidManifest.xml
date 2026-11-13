@@ -3,6 +3,7 @@
 
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
@@ -38,6 +39,10 @@
         <activity android:name=".SendActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name=".ReviewActivity" android:exported="false" />
         <activity android:name=".FocusActivity" android:exported="false" />
+        <activity android:name=".RatesActivity" android:exported="false" />
+        <activity android:name=".OrdersActivity" android:exported="false" />
+        <activity android:name=".OrderActivity" android:exported="false" />
+        <activity android:name=".ResultActivity" android:exported="false" android:theme="@style/Theme.Caalin.NoBar" />
         <activity
             android:name=".BlockActivity"
             android:exported="false"

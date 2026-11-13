@@ -12,12 +12,13 @@ import java.util.Calendar
 
 fun MainActivity.notesPage(): View {
     val page = vbox(16)
-    page.add(text("Notes", 28f, true).apply { setPadding(dp(4), dp(8), 0, dp(12)) })
+    page.add(text("Notes & tasks", 28f, true).apply { setPadding(dp(4), dp(8), 0, dp(12)) })
     val seg = hbox()
-    seg.add(pill("Notes", !notesDebts) { notesDebts = false; render() }, WRAP, end = 8)
-    seg.add(pill("Debts", notesDebts) { notesDebts = true; render() }, WRAP)
+    seg.add(pill("Notes", notesSeg == 0) { notesSeg = 0; render() }, WRAP, end = 8)
+    seg.add(pill("Tasks", notesSeg == 1) { notesSeg = 1; render() }, WRAP, end = 8)
+    seg.add(pill("Debts", notesSeg == 2) { notesSeg = 2; render() }, WRAP)
     page.add(seg)
-    if (notesDebts) debtsSection(page) else notesSection(page)
+    when (notesSeg) { 1 -> tasksSection(page); 2 -> debtsSection(page); else -> notesSection(page) }
     page.add(View(this), MATCH, dp(24))
     return page
 }
@@ -183,5 +184,82 @@ private fun MainActivity.recordPayment(d: Debt) {
             render()
         }
         .setNeutralButton("Delete debt") { _, _ -> Db.deleteDebt(d.id); render() }
+        .setNegativeButton("Cancel", null).show()
+}
+
+// ---------------- Tasks ----------------
+
+fun MainActivity.taskRow(t: Task, onChanged: () -> Unit): View {
+    val r = hbox().apply { setPadding(dp(8), dp(6), dp(14), dp(6)) }
+    val cb = CheckBox(this).apply {
+        isChecked = t.done
+        setOnCheckedChangeListener { _, b -> Db.saveTask(t.copy(done = b)); onChanged() }
+    }
+    r.add(cb, WRAP, end = 4)
+    val m = vbox()
+    m.add(text(t.title, 15f, !t.done, if (t.done) MUTED else INK).apply {
+        if (t.done) paintFlags = paintFlags or android.graphics.Paint.STRIKE_THRU_TEXT_FLAG
+    })
+    t.due?.let {
+        val late = !t.done && it < startOfDay()
+        val today = !t.done && it >= startOfDay() && it < startOfDay() + 86_400_000L
+        m.add(text(if (today) "Today" else if (late) "Overdue · ${dateText(it).substringBefore(",")}" else dateText(it).substringBefore(","),
+            12f, late || today, if (late) RED else if (today) BRAND else MUTED), top = 2)
+    }
+    r.add(m, 0, weight = 1f)
+    r.setOnClickListener { editTask(t, onChanged) }
+    return r
+}
+
+private fun MainActivity.tasksSection(page: LinearLayout) {
+    val add = hbox()
+    val f = field("Add a task…", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES)
+    add.add(f, 0, weight = 1f, end = 10)
+    add.add(text("Add", 15f, true, WHITE).apply {
+        gravity = Gravity.CENTER; setPadding(dp(18), dp(14), dp(18), dp(14)); background = rounded(BRAND, dp(14).toFloat())
+        setOnClickListener {
+            val t = f.text.toString().trim()
+            if (t.isNotEmpty()) { Db.saveTask(Task(title = t)); render() }
+        }
+    }, WRAP)
+    page.add(add, top = 14)
+    val tasks = Db.tasks()
+    val open = tasks.filter { !it.done }
+    val done = tasks.filter { it.done }
+    if (tasks.isEmpty()) { page.add(emptyCard("Nothing to do yet. Add calls to make, goods to collect, payments to follow up."), top = 12); return }
+    if (open.isNotEmpty()) page.add(listCard(open.map { taskRow(it) { render() } }), top = 12)
+    else page.add(emptyCard("All done ✓"), top = 12)
+    if (done.isNotEmpty()) {
+        page.add(sectionTitle("Done (${done.size})", "Clear") {
+            AlertDialog.Builder(this).setMessage("Remove all done tasks?")
+                .setPositiveButton("Remove") { _, _ -> done.forEach { Db.deleteTask(it.id) }; render() }
+                .setNegativeButton("Cancel", null).show()
+        })
+        page.add(listCard(done.take(30).map { taskRow(it) { render() } }))
+    }
+}
+
+private fun MainActivity.editTask(t: Task, onChanged: () -> Unit) {
+    val b = vbox(20)
+    val f = field("Task", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, t.title)
+    b.add(f)
+    var due = t.due
+    val quick = hbox()
+    val dueText = text("", 13.5f, true, BRAND).apply { setPadding(dp(4), dp(12), 0, dp(4)) }
+    fun drawDue() { dueText.text = due?.let { "Due ${dateText(it).substringBefore(",")}" } ?: "No due date" }
+    drawDue()
+    quick.add(pill("Today", false) { due = startOfDay(); drawDue() }, WRAP, end = 6)
+    quick.add(pill("Tomorrow", false) { due = startOfDay() + 86_400_000L; drawDue() }, WRAP, end = 6)
+    quick.add(pill("Pick…", false) {
+        val c = Calendar.getInstance()
+        DatePickerDialog(this, { _, y, m, d -> due = Calendar.getInstance().apply { set(y, m, d, 0, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis; drawDue() },
+            c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
+    }, WRAP, end = 6)
+    quick.add(pill("None", false) { due = null; drawDue() }, WRAP)
+    b.add(HorizontalScrollView(this).apply { addView(quick) }, top = 12)
+    b.add(dueText)
+    AlertDialog.Builder(this).setTitle("Task").setView(b)
+        .setPositiveButton("Save") { _, _ -> Db.saveTask(t.copy(title = f.text.toString().trim().ifBlank { t.title }, due = due)); onChanged() }
+        .setNeutralButton("Delete") { _, _ -> Db.deleteTask(t.id); onChanged() }
         .setNegativeButton("Cancel", null).show()
 }

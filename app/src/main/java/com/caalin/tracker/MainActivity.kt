@@ -26,7 +26,7 @@ class MainActivity : BaseActivity() {
     private var histList: LinearLayout? = null
     var reportMonth = 0 // 0 = this month, -1 last month, ... ; 1 = all since start
     var reportAll = false
-    var notesDebts = false
+    var notesSeg = 0
     private val scrollY = IntArray(5)
     private var scroller: ScrollView? = null
     private var shownTab = -1
@@ -53,20 +53,13 @@ class MainActivity : BaseActivity() {
 
     override fun onUnlockedResume() {
         render()
+        Rates.refresh(this) { if (it && tab == 0) render() }
         if (!imported && SmsStore.canRead(this)) importSms(false)
         if (Prefs.start < 0) askStart(first = true)
         Pending.lastResult?.let { r ->
             Pending.lastResult = null
-            val extra = when {
-                r.note.isNotEmpty() -> "\n\n" + r.note
-                r.status == Status.UNKNOWN -> "\n\nThe app couldn't read a clear answer. Check History, and mark it completed if it went through."
-                else -> ""
-            }
-            AlertDialog.Builder(this)
-                .setTitle(when (r.status) { Status.COMPLETED -> "Sent ✓"; Status.FAILED -> "Payment failed"; else -> "Not confirmed" })
-                .setMessage("${money(r.amount)} to ${r.phone} via ${r.walletName}$extra")
-                .setPositiveButton("OK", null)
-                .show()
+            startActivity(Intent(this, ResultActivity::class.java).putExtra("status", r.status).putExtra("wallet", r.walletId)
+                .putExtra("amount", r.amount).putExtra("phone", r.phone).putExtra("category", r.categoryId ?: -1L).putExtra("note", r.note))
         }
     }
 
@@ -196,8 +189,10 @@ class MainActivity : BaseActivity() {
         val body = vbox(16)
         body.add(quickActions())
         checklistCard(onlyProblems = true)?.let { body.add(it, top = 12) }
+        body.add(ratesCard(), top = 14)
         focusCard()?.let { body.add(it, top = 12) }
         debtCard()?.let { body.add(it, top = 12) }
+        tasksCard()?.let { body.add(it) }
         val needs = Db.uncategorized().size
         if (needs > 0) {
             val nc = card()
@@ -236,16 +231,20 @@ class MainActivity : BaseActivity() {
     }
 
     private fun quickActions(): View {
-        val row = hbox()
+        val grid = vbox()
+        var row = hbox()
+        var n = 0
         fun action(label: String, res: Int, onClick: () -> Unit) {
             val v = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
             v.add(FrameLayout(this).apply {
                 background = rounded(WHITE, dp(18).toFloat(), dp(1), LINE)
                 addView(icon(res, BRAND, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
-            }, dp(56), dp(56))
-            v.add(text(label, 12.5f, true, INK), WRAP, top = 6)
+            }, dp(54), dp(54))
+            v.add(text(label, 12f, true, INK), WRAP, top = 6)
             v.setOnClickListener { onClick() }
             row.add(v, 0, weight = 1f)
+            n++
+            if (n % 4 == 0) { grid.add(row, top = if (n > 4) 10 else 0); row = hbox() }
         }
         action("Send", R.drawable.ic_send) {
             val ready = Db.wallets().filter { it.template.isNotBlank() }
@@ -258,10 +257,40 @@ class MainActivity : BaseActivity() {
                     }.show()
             }
         }
+        action("Orders", R.drawable.ic_box) { startActivity(Intent(this, OrdersActivity::class.java)) }
+        action("Rates", R.drawable.ic_rate) { startActivity(Intent(this, RatesActivity::class.java)) }
         action("Calculator", R.drawable.ic_calc) { Calc.show(this) }
-        action("Notes", R.drawable.ic_note) { tab = 3; notesDebts = false; render() }
+        action("Notes", R.drawable.ic_note) { tab = 3; notesSeg = 0; render() }
+        action("Tasks", R.drawable.ic_check) { tab = 3; notesSeg = 1; render() }
+        action("Debts", R.drawable.ic_debt) { tab = 3; notesSeg = 2; render() }
         action("Focus", R.drawable.ic_focus) { startActivity(Intent(this, FocusActivity::class.java)) }
-        return row
+        return grid
+    }
+
+    private fun ratesCard(): View {
+        Rates.init(this)
+        val c = card()
+        val r = hbox().apply { setPadding(dp(16), dp(14), dp(16), dp(14)) }
+        r.add(text("💱", 22f), WRAP, end = 12)
+        val m = vbox()
+        val cny = Rates.perUsd("CNY"); val aed = Rates.perUsd("AED")
+        m.add(text(if (cny != null && aed != null) "$1 = ${Rates.fmt(cny, "CNY")}  ·  ${Rates.fmt(aed, "AED")}" else "Exchange rates", 15f, true))
+        m.add(text(if (Rates.updated > 0) "Updated ${dateText(Rates.updated)} · tap to convert" else "Connect to the internet to load rates", 12f, color = MUTED), top = 2)
+        r.add(m, 0, weight = 1f)
+        r.add(text("›", 22f, color = MUTED), WRAP)
+        c.addView(r)
+        c.setOnClickListener { startActivity(Intent(this, RatesActivity::class.java)) }
+        return c
+    }
+
+    private fun tasksCard(): View? {
+        val today = startOfDay() + 86_400_000L
+        val due = Db.tasks().filter { !it.done && (it.due == null || it.due < today) }.take(3)
+        if (due.isEmpty()) return null
+        val wrap = vbox()
+        wrap.add(sectionTitle("To do", "All") { tab = 3; notesSeg = 1; render() })
+        wrap.add(listCard(due.map { taskRow(it) { render() } }))
+        return wrap
     }
 
     private fun focusCard(): View? {
@@ -300,7 +329,7 @@ class MainActivity : BaseActivity() {
         if (me > 0) rv.add(text("You owe ${money(me)}", 13.5f, true, RED), WRAP)
         r.add(rv, WRAP)
         c.addView(r)
-        c.setOnClickListener { tab = 3; notesDebts = true; render() }
+        c.setOnClickListener { tab = 3; notesSeg = 2; render() }
         return c
     }
 
@@ -489,7 +518,7 @@ class MainActivity : BaseActivity() {
         sms.addView(sv)
         page.add(sms)
 
-        page.add(text("Caalin Tracker 1.3", 12f, color = MUTED).apply {
+        page.add(text("Caalin Tracker 1.4", 12f, color = MUTED).apply {
             gravity = Gravity.CENTER; setPadding(0, dp(24), 0, dp(8))
         })
         return page

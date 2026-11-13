@@ -13,7 +13,8 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
-data class SendResult(val status: String, val walletName: String, val amount: Double, val phone: String, val note: String = "")
+data class SendResult(val status: String, val walletName: String, val amount: Double, val phone: String, val note: String = "",
+    val walletId: Long = 0, val categoryId: Long? = null)
 
 object Ussd {
     fun enabled(ctx: Context): Boolean {
@@ -45,8 +46,9 @@ object Pending {
     var lastText = ""
     var lastResult: SendResult? = null
     var categoryId: Long? = null
+    var orderId: Long? = null
 
-    fun start(w: Wallet, phone: String, amount: Double, pin: String, category: Long?) {
+    fun start(w: Wallet, phone: String, amount: Double, pin: String, category: Long?, order: Long? = null) {
         clear()
         session++
         walletId = w.id; walletName = w.name; this.phone = phone; this.amount = amount; this.pin = pin
@@ -54,6 +56,7 @@ object Pending {
         armed = !w.hasPinRule()
         typedByHand = false
         categoryId = category
+        orderId = order
         active = true
         val s = session
         handler.postDelayed({ if (active && session == s) finish(Status.UNKNOWN) }, TIMEOUT_MS)
@@ -66,10 +69,10 @@ object Pending {
         Db.addTx(Tx(
             walletId = walletId, walletName = walletName, direction = OUT, phone = phone, name = "", amount = amount,
             status = status, response = text, createdAt = System.currentTimeMillis(), source = "APP",
-            categoryId = categoryId,
+            categoryId = categoryId, orderId = orderId,
         ))
         lastResult = SendResult(status, walletName, amount, phone,
-            if (typedByHand) "The app couldn't type the PIN on this screen, so you typed it." else "")
+            if (typedByHand) "The app couldn't type the PIN on this screen, so you typed it." else "", walletId, categoryId)
         clear()
         // The success pop-up has the name and balance: attach them.
         if (status == Status.COMPLETED && !skipEnrich && last.isNotBlank()) SmsStore.ingest(last, System.currentTimeMillis())
@@ -92,10 +95,11 @@ object Manual {
     var dialed = false
     var at = 0L
     var categoryId: Long? = null
+    var orderId: Long? = null
 
-    fun set(w: Wallet, phone: String, amount: Double, category: Long?) {
+    fun set(w: Wallet, phone: String, amount: Double, category: Long?, order: Long? = null) {
         wallet = w; this.phone = phone; this.amount = amount; dialed = true; at = System.currentTimeMillis()
-        categoryId = category
+        categoryId = category; orderId = order
     }
 
     fun clear() { wallet = null; dialed = false }

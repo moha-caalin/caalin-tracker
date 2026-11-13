@@ -294,6 +294,24 @@ fun AppCompatActivity.showTx(t0: Tx, onChanged: () -> Unit) {
     }
     draw()
 
+    body.add(text("Order", 13f, true, MUTED), top = 14)
+    val orderText = text("", 14f, true, BRAND).apply { setPadding(0, dp(6), 0, dp(2)) }
+    fun drawOrder() {
+        orderText.text = t.orderId?.let { Db.order(it) }?.let { "📦 ${it.title.ifBlank { it.party }}  (change)" } ?: "+ Link to an order"
+    }
+    drawOrder()
+    orderText.setOnClickListener {
+        val kind = if (t.direction == OUT) Order.BUY else Order.SELL
+        val list = Db.orders(kind).filter { it.status != OrderStatus.CLOSED || it.id == t.orderId }
+        if (list.isEmpty()) { toast("No open ${if (kind == Order.BUY) "purchase" else "customer"} orders"); return@setOnClickListener }
+        val names = (list.map { it.title.ifBlank { it.party }.ifBlank { "Order #${it.id}" } } + "No order").toTypedArray()
+        AlertDialog.Builder(this).setTitle("Link to order").setItems(names) { _, i ->
+            val oid = list.getOrNull(i)?.id
+            Db.linkTx(t.id, oid); t = t.copy(orderId = oid); drawOrder()
+        }.show()
+    }
+    body.add(orderText)
+
     body.add(text("Note", 13f, true, MUTED), top = 14)
     val note = field("Add a note", android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES, t.note)
     body.add(note, top = 6)
