@@ -69,7 +69,22 @@ object Status {
 
 data class Category(val id: Long, val name: String, val direction: String, val color: Int)
 
-data class Task(val id: Long = 0, val title: String, val done: Boolean = false, val due: Long? = null, val created: Long = System.currentTimeMillis())
+data class Task(val id: Long = 0, val title: String, val done: Boolean = false, val due: Long? = null, val created: Long = System.currentTimeMillis(), val phone: String = "")
+
+/** A saved person; phone is the 9-digit local number. */
+data class PersonInfo(val phone: String, val name: String, val type: String = PersonType.OTHER, val note: String = "")
+
+object PersonType {
+    const val CUSTOMER = "CUSTOMER"; const val SUPPLIER = "SUPPLIER"; const val STAFF = "STAFF"; const val FAMILY = "FAMILY"; const val OTHER = "OTHER"
+    val ALL = listOf(CUSTOMER, SUPPLIER, STAFF, FAMILY, OTHER)
+    fun label(t: String) = when (t) { CUSTOMER -> "Customer"; SUPPLIER -> "Supplier"; STAFF -> "Staff"; FAMILY -> "Family"; else -> "Other" }
+}
+
+/** Everything known about one person, put together from payments, debts and orders. */
+data class PersonSummary(
+    val phone: String, val name: String, val type: String, val received: Double, val sent: Double, val last: Long, val count: Int,
+    val owesMe: Double, val iOwe: Double, val openOrders: Int,
+)
 
 object OrderStatus {
     val NAMES = listOf("New", "Ordered", "Shipped", "Partly arrived", "Arrived", "Closed")
@@ -131,7 +146,7 @@ object Defaults {
     const val FAIL = "khalad, qalad, ma haysatid, kuguma filna, kugu filnayn, ma guulaysan, guuldarr, failed, error, invalid, not valid, incorrect, wrong, insufficient"
 }
 
-class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 5) {
+class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 6) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE wallets(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, color INTEGER NOT NULL, " +
@@ -147,6 +162,7 @@ class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 5) {
         v3(db)
         v4(db)
         v5(db)
+        v6(db)
         fun seed(name: String, color: Long, template: String, tag: String) {
             db.insert("wallets", null, ContentValues().apply {
                 put("name", name); put("color", color.toInt()); put("template", template); put("sim", 0)
@@ -179,6 +195,15 @@ class DbHelper(ctx: Context) : SQLiteOpenHelper(ctx, "caalin.db", null, 5) {
         }
         if (oldVersion < 4) v4(db)
         if (oldVersion < 5) v5(db)
+        if (oldVersion < 6) v6(db)
+    }
+
+    private fun v6(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE people(phone TEXT PRIMARY KEY, name TEXT, type TEXT NOT NULL DEFAULT 'OTHER', note TEXT, updated INTEGER)")
+        db.execSQL("ALTER TABLE tasks ADD COLUMN phone TEXT")
+        db.execSQL("ALTER TABLE txs ADD COLUMN smart INTEGER NOT NULL DEFAULT 0")
+        // Payments already in the app were handled by the old rules.
+        db.execSQL("UPDATE txs SET smart=1")
     }
 
     private fun v5(db: SQLiteDatabase) {
@@ -501,14 +526,14 @@ object Db {
     ).use { c ->
         val out = ArrayList<Task>()
         while (c.moveToNext()) out.add(Task(c.l("id"), c.s("title") ?: "", c.l("done") == 1L,
-            c.getColumnIndexOrThrow("due").let { if (c.isNull(it)) null else c.getLong(it) }, c.l("created")))
+            c.getColumnIndexOrThrow("due").let { if (c.isNull(it)) null else c.getLong(it) }, c.l("created"), c.s("phone") ?: ""))
         out
     }
 
     fun saveTask(t: Task): Long {
         val cv = ContentValues().apply {
             put("title", t.title); put("done", if (t.done) 1 else 0); if (t.due == null) putNull("due") else put("due", t.due)
-            put("created", t.created); put("done_at", if (t.done) System.currentTimeMillis() else 0)
+            put("created", t.created); put("done_at", if (t.done) System.currentTimeMillis() else 0); put("phone", t.phone)
         }
         return if (t.id > 0) { h.writableDatabase.update("tasks", cv, "id=?", arrayOf(t.id.toString())); t.id }
         else h.writableDatabase.insert("tasks", null, cv)
@@ -601,5 +626,124 @@ object Db {
         val freight = shipments(o.id).sumOf { it.freight }
         val linked = orderTxs(o.id).filter { it.status == Status.COMPLETED }.sumOf { it.amount }
         return OrderMoney(items, freight, linked + o.paidManual)
+    }
+
+    // ----- people -----
+    fun personInfo(phone: String): PersonInfo? {
+        val p = last9(phone); if (p.isEmpty()) return null
+        return h.readableDatabase.rawQuery("SELECT * FROM people WHERE phone=?", arrayOf(p)).use { c ->
+            if (c.moveToFirst()) PersonInfo(p, c.s("name") ?: "", c.s("type") ?: PersonType.OTHER, c.s("note") ?: "") else null
+        }
+    }
+
+    fun savePerson(pi: PersonInfo) {
+        val p = last9(pi.phone); if (p.isEmpty()) return
+        h.writableDatabase.insertWithOnConflict("people", null, ContentValues().apply {
+            put("phone", p); put("name", pi.name); put("type", pi.type); put("note", pi.note); put("updated", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** Sets the person's type only when it is not chosen yet. */
+    fun suggestType(phone: String, type: String, name: String = "") {
+        val cur = personInfo(phone)
+        if (cur == null) savePerson(PersonInfo(phone, name, type))
+        else if (cur.type == PersonType.OTHER) savePerson(cur.copy(type = type, name = cur.name.ifBlank { name }))
+    }
+
+    /** Best name: saved name, else the latest name from an SMS, else the number. */
+    fun displayName(phone: String): String {
+        val p = last9(phone); if (p.isEmpty()) return phone
+        personInfo(p)?.name?.takeIf { it.isNotBlank() }?.let { return it }
+        return h.readableDatabase.rawQuery(
+            "SELECT name, phone FROM txs WHERE name IS NOT NULL AND name<>'' ORDER BY created_at DESC LIMIT 800", null
+        ).use { c ->
+            var n: String? = null
+            while (n == null && c.moveToNext()) if (last9(c.getString(1) ?: "") == p) n = c.getString(0)
+            n
+        }?.let { prettyName(it) } ?: p
+    }
+
+    fun txsFor(phone: String): List<Tx> {
+        val p = last9(phone)
+        return txs(null, null, 3000).filter { last9(it.phone) == p }
+    }
+
+    fun people(): List<PersonSummary> {
+        val map = LinkedHashMap<String, MutableList<Tx>>()
+        txs(null, null, 5000).forEach { t -> val p = last9(t.phone); if (p.isNotEmpty()) map.getOrPut(p) { ArrayList() }.add(t) }
+        val saved = h.readableDatabase.rawQuery("SELECT * FROM people", null).use { c ->
+            val out = HashMap<String, PersonInfo>()
+            while (c.moveToNext()) { val p = c.s("phone") ?: continue; out[p] = PersonInfo(p, c.s("name") ?: "", c.s("type") ?: PersonType.OTHER, c.s("note") ?: "") }
+            out
+        }
+        val debts = debts().filter { !it.closed }
+        val orders = orders().filter { it.status != OrderStatus.CLOSED }
+        val phones = LinkedHashSet<String>().apply {
+            addAll(map.keys); addAll(saved.keys)
+            debts.forEach { last9(it.phone).takeIf { p -> p.isNotEmpty() }?.let { p -> add(p) } }
+            orders.forEach { last9(it.phone).takeIf { p -> p.isNotEmpty() }?.let { p -> add(p) } }
+        }
+        return phones.map { p ->
+            val list = map[p].orEmpty()
+            val done = list.filter { it.status == Status.COMPLETED && it.counted }
+            val info = saved[p]
+            val name = info?.name?.takeIf { it.isNotBlank() } ?: list.firstOrNull { it.name.isNotBlank() }?.name?.let { prettyName(it) }
+                ?: debts.firstOrNull { last9(it.phone) == p }?.name ?: orders.firstOrNull { last9(it.phone) == p }?.party ?: p
+            val pd = debts.filter { last9(it.phone) == p }
+            PersonSummary(p, name, info?.type ?: PersonType.OTHER,
+                done.filter { it.direction == IN }.sumOf { it.amount }, done.filter { it.direction == OUT }.sumOf { it.amount },
+                list.maxOfOrNull { it.createdAt } ?: 0L, list.size,
+                pd.filter { it.direction == Debt.THEY }.sumOf { it.left }, pd.filter { it.direction == Debt.ME }.sumOf { it.left },
+                orders.count { last9(it.phone) == p })
+        }.sortedByDescending { it.last }
+    }
+
+    /** True the first time it is called for a payment; used so a payment is applied to orders/debts only once. */
+    fun claimSmart(txId: Long): Boolean =
+        h.writableDatabase.compileStatement("UPDATE txs SET smart=1 WHERE id=? AND smart=0").use { st ->
+            st.bindLong(1, txId); st.executeUpdateDelete() == 1
+        }
+
+    fun categoryByName(name: String, direction: String): Long? =
+        categories(direction).firstOrNull { it.name.equals(name, ignoreCase = true) }?.id
+}
+
+fun prettyName(s: String) = s.trim().split(Regex("\\s+")).joinToString(" ") { w -> w.lowercase().replaceFirstChar { it.uppercase() } }
+
+/** The connected business rules: what a new payment means for orders, debts and categories. */
+object Smart {
+    /** Default category for a person type, when the person has no history yet. */
+    private fun typeCategory(type: String, direction: String): Long? = when {
+        direction == IN && type == PersonType.CUSTOMER -> Db.categoryByName("Customer payment", IN)
+        direction == OUT && type == PersonType.SUPPLIER -> Db.categoryByName("Stock purchase", OUT)
+        direction == OUT && type == PersonType.STAFF -> Db.categoryByName("Salary", OUT)
+        else -> null
+    }
+
+    fun categoryFor(phone: String, direction: String): Long? =
+        Db.guessCategory(phone, direction) ?: Db.personInfo(phone)?.let { typeCategory(it.type, direction) }
+
+    /** Open orders with this person that still have money to pay/collect, oldest first. */
+    fun openOrders(phone: String, direction: String): List<Pair<Order, OrderMoney>> {
+        val p = last9(phone); if (p.isEmpty()) return emptyList()
+        val kind = if (direction == IN) Order.SELL else Order.BUY
+        return Db.orders(kind).filter { it.status != OrderStatus.CLOSED && last9(it.phone) == p }
+            .map { it to Db.orderMoney(it) }.filter { it.second.left > 0.009 }.sortedBy { it.first.created }
+    }
+
+    /** Called once for every new counted payment: category, then order, else debt. */
+    fun onPayment(txId: Long) {
+        val t = Db.tx(txId) ?: return
+        if (t.status != Status.COMPLETED || !t.counted || t.phone.isBlank()) return
+        if (t.categoryId == null) categoryFor(t.phone, t.direction)?.let { Db.setCategory(t.id, it) }
+        if (t.name.isNotBlank()) {
+            val info = Db.personInfo(t.phone)
+            if (info == null) Db.savePerson(PersonInfo(t.phone, prettyName(t.name)))
+        }
+        if (!Db.claimSmart(t.id)) return
+        if (t.orderId != null) return
+        val order = openOrders(t.phone, t.direction).firstOrNull()
+        if (order != null) { Db.linkTx(t.id, order.first.id); return }
+        Db.applyDebtPayment(t.phone, t.direction, t.amount, t.createdAt)
     }
 }

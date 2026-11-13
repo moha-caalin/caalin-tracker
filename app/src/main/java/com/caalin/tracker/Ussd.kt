@@ -66,7 +66,7 @@ object Pending {
         if (!active) return
         val text = transcript.toString().trim().ifEmpty { "No USSD reply was read." }
         val last = lastText
-        Db.addTx(Tx(
+        val newId = Db.addTx(Tx(
             walletId = walletId, walletName = walletName, direction = OUT, phone = phone, name = "", amount = amount,
             status = status, response = text, createdAt = System.currentTimeMillis(), source = "APP",
             categoryId = categoryId, orderId = orderId,
@@ -76,6 +76,7 @@ object Pending {
         clear()
         // The success pop-up has the name and balance: attach them.
         if (status == Status.COMPLETED && !skipEnrich && last.isNotBlank()) SmsStore.ingest(last, System.currentTimeMillis())
+        if (status == Status.COMPLETED) Smart.onPayment(newId)
     }
 
     fun clear() {

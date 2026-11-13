@@ -273,6 +273,9 @@ fun AppCompatActivity.showTx(t0: Tx, onChanged: () -> Unit) {
     body.add(text((if (incoming) "+" else "−") + money(t.amount), 30f, true), top = 2)
     body.add(text(t.who + if (t.name.isNotBlank() && t.phone.isNotBlank()) "  (${t.phone})" else "", 15f), top = 6)
     body.add(text("${t.walletName} · ${dateText(t.createdAt)}", 13f, color = MUTED), top = 2)
+    if (t.phone.isNotBlank()) body.add(text("View everything with ${Db.displayName(t.phone)} →", 14f, true, BRAND).apply {
+        setPadding(0, dp(8), 0, 0); setOnClickListener { openPerson(t.phone) }
+    })
     body.add(text(statusLabel(t.status) + (if (t.source == "SMS") " · from SMS" else " · sent from app") +
         (if (!t.counted) " · before start (not counted)" else ""), 13f, true, statusColor(t.status)), top = 8)
     t.balance?.let { body.add(text("Balance after: ${money(it)}", 13f, color = MUTED), top = 4) }

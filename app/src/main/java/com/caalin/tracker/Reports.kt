@@ -137,7 +137,7 @@ fun MainActivity.reportsPage(): View {
         if (p.inn > 0) rv.add(text("+" + money(p.inn), 14f, true, GREEN), WRAP)
         if (p.out > 0) rv.add(text("−" + money(p.out), 14f, true, RED), WRAP)
         r.add(rv, WRAP)
-        r.setOnClickListener { histQuery = p.phone.ifBlank { p.name }; tab = 1; render() }
+        r.setOnClickListener { if (p.phone.isNotBlank()) openPerson(p.phone) else { histQuery = p.name; tab = 1; render() } }
         r as View
     }))
 

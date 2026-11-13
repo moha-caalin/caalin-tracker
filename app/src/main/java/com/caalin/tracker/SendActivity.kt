@@ -9,45 +9,46 @@ import android.os.Bundle
 import android.provider.ContactsContract
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.telecom.TelecomManager
-import android.text.Editable
 import android.text.InputType
-import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.biometric.BiometricPrompt
 import kotlin.math.abs
 
-/** One-hand send: 1 Who → 2 How much → 3 What for. Every control sits in the lower half of the screen. */
+/** One fast screen: tap a person, type the amount, Send. Everything sits within thumb reach. */
 class SendActivity : BaseActivity() {
     private lateinit var w: Wallet
-    private var step = 0
     private var phone = ""
     private var who = ""
     private var amountStr = ""
     private var categoryId: Long? = null
+    private var userCat = false
     private var orderId: Long? = null
     private var afterPermission: (() -> Unit)? = null
     private var busy = false
+    private var extra: Pair<String, String>? = null
 
-    private lateinit var stepText: TextView
-    private lateinit var body: FrameLayout
-    private lateinit var dots: LinearLayout
+    private lateinit var peopleRow: LinearLayout
+    private lateinit var toLine: LinearLayout
+    private lateinit var hints: LinearLayout
+    private lateinit var amountView: TextView
+    private lateinit var sumView: TextView
+    private lateinit var catRow: LinearLayout
+    private lateinit var sendBtn: com.google.android.material.button.MaterialButton
 
     private val pickContact = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val uri = r.data?.data ?: return@registerForActivityResult
         try {
             contentResolver.query(uri, arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER,
                 ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME), null, null, null)?.use { c ->
-                if (c.moveToFirst()) choosePerson(normalizePhone(c.getString(0) ?: ""), c.getString(1) ?: "")
+                if (c.moveToFirst()) choose(normalizePhone(c.getString(0) ?: ""), c.getString(1) ?: "")
             }
         } catch (e: Exception) { toast("Couldn't read that contact") }
     }
@@ -57,37 +58,57 @@ class SendActivity : BaseActivity() {
         val loaded = Db.wallet(intent.getLongExtra("id", -1))
         if (loaded == null) { finish(); return }
         w = loaded
-        intent.getStringExtra("phone")?.let { phone = normalizePhone(it); who = intent.getStringExtra("name") ?: ""; if (phone.isNotEmpty()) step = 1 }
         supportActionBar?.hide()
-
-        val root = vbox()
-        // Slim header
-        val head = hbox().apply {
-            setPadding(dp(8), dp(10), dp(16), dp(10))
-            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(w.color, darker(w.color)))
-        }
-        head.add(text("←", 24f, true, WHITE).apply { setPadding(dp(10), 0, dp(14), 0); setOnClickListener { back() } }, WRAP)
-        val ht = vbox()
-        ht.add(text("Send with ${w.name}", 17f, true, WHITE))
-        stepText = text("", 12.5f, color = 0xDDFFFFFF.toInt())
-        ht.add(stepText)
-        head.add(ht, 0, weight = 1f)
-        Db.latestBalance(w.id)?.let { head.add(text(money(it), 15f, true, WHITE), WRAP) }
-        root.add(head)
-        dots = hbox().apply { setPadding(dp(16), dp(10), dp(16), 0) }
-        root.add(dots)
-        body = FrameLayout(this)
-        root.add(body, MATCH, 0, weight = 1f)
-        setContentView(root)
         window.statusBarColor = darker(w.color)
 
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = back()
-        })
-        draw()
-    }
+        val root = vbox()
+        val head = hbox().apply {
+            setPadding(dp(6), dp(8), dp(16), dp(8))
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(w.color, darker(w.color)))
+        }
+        head.add(FrameLayout(this).apply {
+            addView(icon(R.drawable.ic_back, WHITE, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+            setOnClickListener { finish() }
+        }, dp(48), dp(48), end = 4)
+        head.add(text("Send with ${w.name}", 17f, true, WHITE), 0, weight = 1f)
+        Db.latestBalance(w.id)?.let { head.add(text(money(it), 15f, true, WHITE), WRAP) }
+        root.add(head)
 
-    private fun back() { if (step > 0 && !busy) { step--; draw() } else finish() }
+        val col = vbox(14).apply { gravity = Gravity.BOTTOM }
+        // Who
+        peopleRow = hbox()
+        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(peopleRow) })
+        toLine = hbox()
+        col.add(toLine, top = 6)
+        hints = hbox()
+        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(hints) }, top = 4)
+        // Amount
+        amountView = text("$0", 44f, true, MUTED).apply { gravity = Gravity.CENTER }
+        col.add(amountView, top = 2)
+        sumView = text("", 14f, true, BRAND).apply { gravity = Gravity.CENTER }
+        col.add(sumView)
+        val quick = hbox()
+        listOf(1, 5, 10, 20, 50, 100).forEach { q -> quick.add(pill("$$q", false) { amountStr = q.toString(); refresh() }, WRAP, end = 8) }
+        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 6)
+        // What for
+        catRow = hbox()
+        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(catRow) }, top = 10)
+        // Keypad
+        col.add(keypad(), top = 8)
+
+        val sv = ScrollView(this).apply { isFillViewport = true; addView(col) }
+        root.add(sv, MATCH, 0, weight = 1f)
+        sendBtn = button("Send") { send() }.apply {
+            minHeight = dp(58); textSize = 18f
+            setIconResource(R.drawable.ic_fingerprint)
+            iconGravity = com.google.android.material.button.MaterialButton.ICON_GRAVITY_TEXT_START
+        }
+        root.add(vbox().apply { setPadding(dp(14), dp(8), dp(14), dp(14)); setBackgroundColor(WHITE); elevation = dp(6).toFloat(); add(sendBtn) })
+        setContentView(root)
+
+        intent.getStringExtra("phone")?.let { p -> if (normalizePhone(p).length >= 7) { extra = normalizePhone(p) to (intent.getStringExtra("name") ?: ""); choose(extra!!.first, extra!!.second) } }
+        drawPeople(); drawTo(); drawCats(); refresh()
+    }
 
     private fun darker(c: Int): Int {
         val hsv = FloatArray(3); android.graphics.Color.colorToHSV(c, hsv); hsv[2] *= 0.7f
@@ -96,109 +117,108 @@ class SendActivity : BaseActivity() {
 
     private fun amountValue() = Calc.eval(amountStr) ?: 0.0
 
-    private fun draw() {
-        stepText.text = listOf("Step 1 of 3 · Who?", "Step 2 of 3 · How much?", "Step 3 of 3 · What for?")[step]
-        dots.removeAllViews()
-        for (i in 0..2) dots.add(View(this).apply { background = rounded(if (i <= step) w.color else LINE, dp(3).toFloat()) },
-            0, dp(5), weight = 1f, end = if (i < 2) 6 else 0)
-        body.removeAllViews()
-        body.addView(when (step) { 0 -> stepWho(); 1 -> stepAmount(); else -> stepWhat() })
-    }
-
-    /** Content pushed to the bottom so the thumb reaches everything. */
-    private fun bottomPage(content: View, footer: View?): View {
-        val col = vbox()
-        val sv = ScrollView(this).apply { isFillViewport = true }
-        val inner = vbox(16).apply { gravity = Gravity.BOTTOM }
-        inner.add(content)
-        sv.addView(inner)
-        col.add(sv, MATCH, 0, weight = 1f)
-        if (footer != null) col.add(vbox().apply {
-            setPadding(dp(16), dp(10), dp(16), dp(16)); setBackgroundColor(WHITE); elevation = dp(6).toFloat(); add(footer)
-        })
-        sv.post { sv.fullScroll(View.FOCUS_DOWN) }
-        return col
-    }
-
-    // ---------- Step 1: who ----------
-    private fun choosePerson(p: String, name: String) {
+    private fun choose(p: String, name: String) {
         if (p.length < 7) { toast("That number looks too short"); return }
-        phone = p; who = name
-        if (categoryId == null) categoryId = Db.guessCategory(p, OUT)
-        step = 1; draw()
+        phone = p
+        who = name.ifBlank { Db.displayName(p).takeIf { it != p } ?: "" }
+        orderId = null
+        if (!userCat) categoryId = Smart.categoryFor(p, OUT)
+        if (::peopleRow.isInitialized) { drawPeople(); drawTo(); drawCats(); refresh() }
     }
 
-    private fun stepWho(): View {
-        val c = vbox()
-        c.add(text("Who are you paying?", 22f, true).apply { setPadding(dp(4), 0, 0, dp(12)) })
-        val recents = Db.recentRecipients(w.id).map { normalizePhone(it.first) to it.second }.distinctBy { it.first }.take(5)
-        if (recents.isNotEmpty()) {
-            c.add(text("Recent", 13f, true, MUTED).apply { setPadding(dp(4), 0, 0, dp(6)) })
-            c.add(listCard(recents.map { (ph, nm) ->
-                val r = hbox().apply { setPadding(dp(14), dp(14), dp(14), dp(14)) }
-                val label = nm.ifBlank { ph }
-                r.add(badge(0xFFE9EEF0.toInt(), 44, letter = label.take(1).uppercase(), iconTint = INK), dp(44), dp(44), end = 14)
-                val m = vbox()
-                m.add(text(label.split(" ").joinToString(" ") { it.lowercase().replaceFirstChar { ch -> ch.uppercase() } }, 16f, true).apply { maxLines = 1 })
-                if (nm.isNotBlank()) m.add(text(ph, 13f, color = MUTED))
-                r.add(m, 0, weight = 1f)
-                r.add(text("›", 24f, color = MUTED), WRAP)
-                r.setOnClickListener { choosePerson(ph, nm) }
-                r as View
-            }))
+    private fun drawPeople() {
+        peopleRow.removeAllViews()
+        fun avatar(label: String, sub: String, selected: Boolean, bg: Int, fg: Int, onClick: () -> Unit) {
+            val v = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(4), 0, dp(4), 0); setOnClickListener { onClick() } }
+            v.add(text(label, 20f, true, fg).apply {
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL; setColor(bg); if (selected) setStroke(dp(3), w.color)
+                }
+            }, dp(58), dp(58))
+            v.add(text(sub, 12f, selected, if (selected) INK else MUTED).apply { maxLines = 1; gravity = Gravity.CENTER; maxWidth = dp(72) }, WRAP, top = 4)
+            peopleRow.add(v, WRAP, end = 6)
         }
-        c.add(text("Or a new number", 13f, true, MUTED).apply { setPadding(dp(4), dp(16), 0, dp(6)) })
-        val f = field("e.g. 617111194", InputType.TYPE_CLASS_PHONE, if (who.isBlank()) phone else "")
-        f.textSize = 20f
+        avatar("+", "New", false, GREEN_BG, BRAND) { newNumber() }
+        val recents = (listOfNotNull(extra) + Db.recentRecipients(w.id).map { normalizePhone(it.first) to it.second })
+            .distinctBy { it.first }.take(12)
+        recents.forEach { (p, n) ->
+            val name = (Db.personInfo(p)?.name?.takeIf { it.isNotBlank() } ?: n.ifBlank { p }).let { if (it == p) it else prettyName(it) }
+            avatar(name.take(1).uppercase(), name.split(" ").first(), p == phone, 0xFFE9EEF0.toInt(), INK) { choose(p, name) }
+        }
+    }
+
+    private fun newNumber() {
+        val f = field("e.g. 617111194", InputType.TYPE_CLASS_PHONE).apply { textSize = 20f }
         val row = hbox()
         row.add(f, 0, weight = 1f, end = 10)
-        row.add(roundIcon(R.drawable.ic_contacts, 56) {
+        row.add(FrameLayout(this).apply {
+            background = rounded(GREEN_BG, dp(14).toFloat())
+            addView(icon(R.drawable.ic_contacts, BRAND, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        }, dp(52), dp(52))
+        lateinit var dlg: AlertDialog
+        row.getChildAt(1).setOnClickListener {
+            dlg.dismiss()
             try { pickContact.launch(Intent(Intent.ACTION_PICK, ContactsContract.CommonDataKinds.Phone.CONTENT_URI)) }
             catch (e: Exception) { toast("No contacts app found") }
-        }, dp(56), dp(56))
-        c.add(row)
-        val next = button("Next") { choosePerson(normalizePhone(f.text.toString()), "") }.apply { minHeight = dp(56); textSize = 17f }
-        return bottomPage(c, next)
+        }
+        dlg = AlertDialog.Builder(this).setTitle("New number").setView(vbox(20).apply { add(row) })
+            .setPositiveButton("Use") { _, _ -> choose(normalizePhone(f.text.toString()), "") }
+            .setNegativeButton("Cancel", null).create()
+        dlg.show()
+        f.requestFocus()
     }
 
-    // ---------- Step 2: amount ----------
-    private fun stepAmount(): View {
-        val c = vbox()
-        val to = hbox().apply {
-            setPadding(dp(14), dp(10), dp(14), dp(10)); background = rounded(WHITE, dp(14).toFloat(), dp(1), LINE)
-            setOnClickListener { step = 0; draw() }
+    private fun drawTo() {
+        toLine.removeAllViews()
+        hints.removeAllViews()
+        if (phone.isEmpty()) {
+            toLine.add(text("Tap a person above, or + for a new number", 14f, color = MUTED).apply { gravity = Gravity.CENTER }, MATCH)
+            return
         }
-        to.add(text("To  ", 14f, color = MUTED), WRAP)
-        to.add(text(who.ifBlank { phone }, 15f, true).apply { maxLines = 1 }, 0, weight = 1f)
-        if (who.isNotBlank()) to.add(text(phone, 13f, color = MUTED), WRAP, end = 8)
-        to.add(text("Change", 13f, true, BRAND), WRAP)
-        c.add(to)
-
-        val big = text("", 48f, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, 0) }
-        val sub = text("", 15f, true, BRAND).apply { gravity = Gravity.CENTER }
-        c.add(big); c.add(sub)
-        fun refresh() {
-            big.text = "$" + amountStr.ifEmpty { "0" }
-            big.setTextColor(if (amountStr.isEmpty()) MUTED else INK)
-            sub.text = if (Calc.hasOperator(amountStr)) Calc.eval(amountStr)?.let { "= " + money(it) } ?: "…" else ""
+        toLine.add(text("To ", 14f, color = MUTED), WRAP)
+        toLine.add(text(who.ifBlank { phone }, 15f, true).apply { maxLines = 1 }, 0, weight = 1f)
+        if (who.isNotBlank()) toLine.add(text(phone, 13f, color = MUTED), WRAP)
+        // Smart hints: what this person is waiting for.
+        Smart.openOrders(phone, OUT).take(3).forEach { (o, m) ->
+            hints.add(pill("📦 ${o.title.ifBlank { "Order" }.take(16)} · ${money(m.left)} left", orderId == o.id) {
+                orderId = if (orderId == o.id) null else o.id
+                if (orderId != null) { amountStr = amountText(m.left); Db.categoryByName("Stock purchase", OUT)?.let { if (!userCat) categoryId = it } }
+                drawTo(); drawCats(); refresh()
+            }, WRAP, end = 8)
         }
-        refresh()
-
-        val quick = hbox()
-        listOf(1, 5, 10, 20, 50, 100).forEach { q ->
-            quick.add(pill("$$q", false) { amountStr = q.toString(); refresh() }, WRAP, end = 8)
+        Db.debts().filter { !it.closed && it.direction == Debt.ME && last9(it.phone) == phone }.take(2).forEach { d ->
+            hints.add(pill("You owe ${money(d.left)}", false) { amountStr = amountText(d.left); refresh() }, WRAP, end = 8)
         }
-        c.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 16)
+    }
 
-        val keys = listOf(listOf("1", "2", "3", "+"), listOf("4", "5", "6", "−"), listOf("7", "8", "9", "×"), listOf(".", "0", "⌫", "="))
+    private fun drawCats() {
+        catRow.removeAllViews()
+        catRow.add(text("For:", 13f, true, MUTED), WRAP, end = 8)
+        Db.categories(OUT).forEach { c ->
+            val sel = c.id == categoryId
+            catRow.add(text(c.name, 14f, true, if (sel) WHITE else INK).apply {
+                setPadding(dp(14), dp(9), dp(14), dp(9))
+                background = rounded(if (sel) c.color else WHITE, dp(18).toFloat(), if (sel) 0 else dp(1), LINE)
+                setOnClickListener { categoryId = c.id; userCat = true; drawCats(); refresh() }
+            }, WRAP, end = 6)
+        }
+        catRow.add(text("+ New", 14f, true, BRAND).apply {
+            setPadding(dp(14), dp(9), dp(14), dp(9))
+            setOnClickListener { askText("New expense category") { n -> categoryId = Db.addCategory(n, OUT); userCat = true; drawCats(); refresh() } }
+        }, WRAP)
+    }
+
+    private fun keypad(): View {
         val pad = vbox()
+        val keys = listOf(listOf("1", "2", "3", "+"), listOf("4", "5", "6", "−"), listOf("7", "8", "9", "×"), listOf(".", "0", "⌫", "="))
         for (r in keys) {
             val row = hbox()
             for (k in r) {
                 val op = k in listOf("+", "−", "×", "=")
-                row.add(text(k, 26f, !op, if (op) BRAND else INK).apply {
-                    gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(12))
-                    background = rounded(if (op) GREEN_BG else WHITE, dp(16).toFloat(), if (op) 0 else dp(1), LINE)
+                row.add(text(k, 24f, !op, if (op) BRAND else INK).apply {
+                    gravity = Gravity.CENTER; setPadding(0, dp(11), 0, dp(11))
+                    background = rounded(if (op) GREEN_BG else WHITE, dp(14).toFloat(), if (op) 0 else dp(1), LINE)
                     setOnClickListener {
                         when (k) {
                             "⌫" -> amountStr = amountStr.dropLast(1)
@@ -212,84 +232,31 @@ class SendActivity : BaseActivity() {
             }
             pad.add(row, top = 8)
         }
-        c.add(pad, top = 8)
-        val next = button("Next") {
-            val v = amountValue()
-            if (v <= 0) toast("Enter an amount") else { amountStr = amountText(v); step = 2; draw() }
-        }.apply { minHeight = dp(56); textSize = 17f }
-        return bottomPage(c, next)
+        return pad
     }
 
-    // ---------- Step 3: what for + send ----------
-    private fun stepWhat(): View {
+    private fun refresh() {
+        amountView.text = "$" + amountStr.ifEmpty { "0" }
+        amountView.setTextColor(if (amountStr.isEmpty()) MUTED else INK)
+        sumView.text = if (Calc.hasOperator(amountStr)) Calc.eval(amountStr)?.let { "= " + money(it) } ?: "…" else ""
+        sumView.visibility = if (sumView.text.isEmpty()) View.GONE else View.VISIBLE
         val a = amountValue()
-        val c = vbox()
-        val sum = card()
-        val sv = vbox(18).apply { gravity = Gravity.CENTER_HORIZONTAL }
-        sv.add(text(money(a), 34f, true), WRAP)
-        sv.add(text("to ${who.ifBlank { phone }}" + if (who.isNotBlank()) " · $phone" else "", 15f, color = MUTED).apply { gravity = Gravity.CENTER }, WRAP, top = 2)
-        sv.add(text("via ${w.name}", 13f, color = MUTED), WRAP, top = 2)
-        sum.addView(sv)
-        c.add(sum)
-
-        c.add(text("What for?", 18f, true).apply { setPadding(dp(4), dp(18), 0, dp(8)) })
-        val cats = Db.categories(OUT)
-        val grid = vbox()
-        (cats.map { it.id to it.name } + (-1L to "+ New")).chunked(3).forEach { rowCats ->
-            val row = hbox()
-            rowCats.forEachIndexed { i, (id, name) ->
-                val sel = id == categoryId
-                val cat = cats.firstOrNull { it.id == id }
-                row.add(text(name, 14f, true, if (sel) WHITE else INK).apply {
-                    gravity = Gravity.CENTER; minLines = 2; maxLines = 2
-                    setPadding(dp(6), dp(12), dp(6), dp(12))
-                    background = rounded(if (sel) (cat?.color ?: BRAND) else WHITE, dp(14).toFloat(), if (sel) 0 else dp(1), LINE)
-                    setOnClickListener {
-                        if (id == -1L) askText("New expense category") { n -> categoryId = Db.addCategory(n, OUT); draw() }
-                        else { categoryId = id; draw() }
-                    }
-                }, 0, weight = 1f, end = if (i < 2) 8 else 0)
-            }
-            repeat(3 - rowCats.size) { row.add(View(this), 0, weight = 1f, end = 8) }
-            grid.add(row, top = 8)
+        val ready = phone.length >= 7 && a > 0 && categoryId != null && !busy && !Pending.active
+        sendBtn.isEnabled = ready
+        sendBtn.text = when {
+            busy || Pending.active -> "Waiting for reply…"
+            phone.isEmpty() -> "Choose who to pay"
+            a <= 0 -> "Enter the amount"
+            categoryId == null -> "Choose what it's for"
+            else -> "Send ${money(a)}" + (if (who.isNotBlank()) " to ${who.split(" ").first()}" else "")
         }
-        c.add(grid)
-
-        val open = Db.orders(Order.BUY).filter { it.status != OrderStatus.CLOSED }.take(6)
-        if (open.isNotEmpty()) {
-            c.add(text("For an order? (optional)", 13f, true, MUTED).apply { setPadding(dp(4), dp(16), 0, dp(6)) })
-            val orow = hbox()
-            open.forEach { o ->
-                orow.add(pill(o.title.ifBlank { o.party }.take(22), orderId == o.id) { orderId = if (orderId == o.id) null else o.id; draw() }, WRAP, end = 8)
-            }
-            c.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(orow) })
-        }
-
-        val auto = w.hasPin && Ussd.enabled(this)
-        c.add(text(if (auto) "🔒 Auto-PIN on — the app types your PIN after the fingerprint."
-            else "Auto-PIN off — you'll type the PIN yourself.", 12.5f, true, if (auto) BRAND else AMBER).apply {
-            setPadding(dp(12), dp(10), dp(12), dp(10)); background = rounded(if (auto) GREEN_BG else AMBER_BG, dp(12).toFloat())
-        }, top = 16)
-
-        val send = button(if (busy) "Waiting for reply…" else "Send ${money(a)}") { send() }.apply {
-            minHeight = dp(60); textSize = 18f; isEnabled = !busy && !Pending.active
-            setIconResource(R.drawable.ic_fingerprint)
-            iconGravity = com.google.android.material.button.MaterialButton.ICON_GRAVITY_TEXT_START
-        }
-        return bottomPage(c, send)
-    }
-
-    private fun roundIcon(res: Int, size: Int, onClick: () -> Unit): View = FrameLayout(this).apply {
-        background = rounded(GREEN_BG, dp(14).toFloat())
-        addView(icon(res, BRAND, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
-        setOnClickListener { onClick() }
     }
 
     // ---------- sending ----------
     private fun send() {
         val p = phone
         val a = amountValue()
-        if (a <= 0 || p.length < 7) { step = 0; draw(); return }
+        if (a <= 0 || p.length < 7) return
         if (w.template.isBlank()) { toast("Add the USSD code for ${w.name} in Settings first"); return }
         if (Pending.active) { toast("Another send is still in progress"); return }
         val cat = categoryId
@@ -375,7 +342,7 @@ class SendActivity : BaseActivity() {
         try {
             startActivity(i)
             busy = true
-            if (step == 2) draw()
+            refresh()
         } catch (e: Exception) {
             Pending.clear(); Manual.clear()
             toast("Could not dial: ${e.message}")
@@ -410,9 +377,12 @@ class SendActivity : BaseActivity() {
             fun save(status: String) {
                 val sms = if (status == Status.COMPLETED) confirmedBySms(m, ph, am, at) else null
                 if (sms != null) attach(sms)
-                else Db.addTx(Tx(walletId = m.id, walletName = m.name, direction = OUT, phone = ph, name = who, amount = am,
-                    status = status, response = "Confirmed by hand in the app.", createdAt = System.currentTimeMillis(),
-                    source = "APP", categoryId = cat, orderId = ord))
+                else {
+                    val id = Db.addTx(Tx(walletId = m.id, walletName = m.name, direction = OUT, phone = ph, name = who, amount = am,
+                        status = status, response = "Confirmed by hand in the app.", createdAt = System.currentTimeMillis(),
+                        source = "APP", categoryId = cat, orderId = ord))
+                    if (status == Status.COMPLETED) Smart.onPayment(id)
+                }
                 showResult(SendResult(status, m.name, am, ph, "", m.id, cat))
             }
             AlertDialog.Builder(this)
@@ -423,6 +393,6 @@ class SendActivity : BaseActivity() {
                 .setNegativeButton("No, failed") { _, _ -> save(Status.FAILED) }
                 .setNeutralButton("Not sure") { _, _ -> save(Status.UNKNOWN) }
                 .show()
-        } else if (step == 2) draw()
+        } else refresh()
     }
 }

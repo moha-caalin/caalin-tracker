@@ -125,6 +125,8 @@ fun editOrder(a: BaseActivity, o: Order?, kind: String, onSaved: (Long) -> Unit)
         .setView(ScrollView(a).apply { addView(box) })
         .setPositiveButton("Save") { _, _ ->
             val base = o ?: Order(kind = kind, party = "", phone = "", title = "")
+            val ph = normalizePhone(phone.text.toString())
+            if (ph.length >= 7) Db.suggestType(ph, if (kind == Order.BUY) PersonType.SUPPLIER else PersonType.CUSTOMER, party.text.toString().trim())
             onSaved(Db.saveOrder(base.copy(title = title.text.toString().trim(), party = party.text.toString().trim(),
                 phone = normalizePhone(phone.text.toString()), note = note.text.toString().trim(), due = due)))
         }

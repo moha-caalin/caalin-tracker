@@ -27,7 +27,9 @@ class MainActivity : BaseActivity() {
     var reportMonth = 0 // 0 = this month, -1 last month, ... ; 1 = all since start
     var reportAll = false
     var notesSeg = 0
-    private val scrollY = IntArray(5)
+    var peopleQuery = ""
+    var peopleFilter: String? = null
+    private val scrollY = IntArray(6)
     private var scroller: ScrollView? = null
     private var shownTab = -1
     private lateinit var content: FrameLayout
@@ -109,7 +111,13 @@ class MainActivity : BaseActivity() {
         drawNav()
         content.removeAllViews()
         histList = null
-        val page = when (tab) { 0 -> home(); 1 -> history(); 2 -> reportsPage(); 3 -> notesPage(); else -> settings() }
+        val page = when (tab) {
+            0 -> home(); 1 -> history(); 2 -> peoplePage(); 3 -> reportsPage(); 5 -> vbox().apply {
+                add(text("‹  More", 15f, true, BRAND).apply { setPadding(dp(20), dp(16), dp(20), 0); setOnClickListener { tab = 4; render() } })
+                add(notesPage())
+            }
+            else -> more()
+        }
         val sv = ScrollView(this).apply { isFillViewport = true; addView(page) }
         content.addView(sv)
         scroller = sv
@@ -121,9 +129,9 @@ class MainActivity : BaseActivity() {
     private fun drawNav() {
         nav.removeAllViews()
         listOf(Triple("Home", R.drawable.ic_home, 0), Triple("History", R.drawable.ic_list, 1),
-            Triple("Reports", R.drawable.ic_chart, 2), Triple("Notes", R.drawable.ic_note, 3),
-            Triple("Settings", R.drawable.ic_tune, 4)).forEach { (label, res, i) ->
-            val sel = tab == i
+            Triple("People", R.drawable.ic_people, 2), Triple("Reports", R.drawable.ic_chart, 3),
+            Triple("More", R.drawable.ic_more, 4)).forEach { (label, res, i) ->
+            val sel = tab == i || (i == 4 && tab == 5)
             val item = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(4), 0, dp(4)) }
             val ic = icon(res, if (sel) BRAND else MUTED, 24)
             val holder = FrameLayout(this).apply {
@@ -191,26 +199,7 @@ class MainActivity : BaseActivity() {
         checklistCard(onlyProblems = true)?.let { body.add(it, top = 12) }
         body.add(ratesCard(), top = 14)
         focusCard()?.let { body.add(it, top = 12) }
-        debtCard()?.let { body.add(it, top = 12) }
-        tasksCard()?.let { body.add(it) }
-        val needs = Db.uncategorized().size
-        if (needs > 0) {
-            val nc = card()
-            val r = hbox().apply { setPadding(dp(16), dp(14), dp(14), dp(14)) }
-            r.add(text("🏷", 22f), WRAP, end = 12)
-            val m = vbox()
-            m.add(text("$needs payment${if (needs == 1) "" else "s"} need a category", 15f, true))
-            m.add(text("Tap to go through them quickly", 12.5f, color = MUTED), top = 2)
-            r.add(m, 0, weight = 1f)
-            r.add(text("Review", 14f, true, WHITE).apply {
-                setPadding(dp(14), dp(8), dp(14), dp(8)); background = rounded(AMBER, dp(18).toFloat())
-            }, WRAP)
-            nc.addView(r)
-            nc.setCardBackgroundColor(AMBER_BG)
-            nc.strokeColor = 0x33C77700
-            nc.setOnClickListener { startActivity(Intent(this, ReviewActivity::class.java)) }
-            body.add(nc, top = if (body.childCount > 0) 12 else 0)
-        }
+        attentionCard()?.let { body.add(it) }
 
         body.add(sectionTitle("Send money"))
         val wallets = Db.wallets()
@@ -260,11 +249,61 @@ class MainActivity : BaseActivity() {
         action("Orders", R.drawable.ic_box) { startActivity(Intent(this, OrdersActivity::class.java)) }
         action("Rates", R.drawable.ic_rate) { startActivity(Intent(this, RatesActivity::class.java)) }
         action("Calculator", R.drawable.ic_calc) { Calc.show(this) }
-        action("Notes", R.drawable.ic_note) { tab = 3; notesSeg = 0; render() }
-        action("Tasks", R.drawable.ic_check) { tab = 3; notesSeg = 1; render() }
-        action("Debts", R.drawable.ic_debt) { tab = 3; notesSeg = 2; render() }
-        action("Focus", R.drawable.ic_focus) { startActivity(Intent(this, FocusActivity::class.java)) }
+        if (n % 4 != 0) grid.add(row)
         return grid
+    }
+
+    /** One list of what needs you today: debts, shipments, tasks, payments without a category. */
+    private fun attentionCard(): View? {
+        val rows = ArrayList<View>()
+        val today = startOfDay(); val tomorrow = today + 86_400_000L
+        fun row(emoji: String, title: String, sub: String, subColor: Int, action: String?, onAction: (() -> Unit)?, onClick: () -> Unit) {
+            val r = hbox().apply { setPadding(dp(14), dp(12), dp(14), dp(12)) }
+            r.add(text(emoji, 20f).apply { gravity = Gravity.CENTER }, dp(32), WRAP, end = 10)
+            val m = vbox()
+            m.add(text(title, 15f, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+            m.add(text(sub, 12.5f, subColor != MUTED, subColor).apply { maxLines = 1 }, top = 2)
+            r.add(m, 0, weight = 1f)
+            if (action != null) r.add(text(action, 13f, true, WHITE).apply {
+                setPadding(dp(12), dp(7), dp(12), dp(7)); background = rounded(BRAND, dp(16).toFloat()); setOnClickListener { onAction?.invoke() }
+            }, WRAP)
+            r.setOnClickListener { onClick() }
+            rows.add(r)
+        }
+        // Money owed to you that is due
+        Db.debts().filter { !it.closed && it.direction == Debt.THEY && it.due != null && it.due < tomorrow }.sortedBy { it.due }.take(3).forEach { d ->
+            val days = ((today - (d.due ?: today)) / 86_400_000L).toInt()
+            val nm = d.name.ifBlank { Db.displayName(d.phone) }
+            row("💰", "$nm owes ${money(d.left)}", if (days > 0) "$days day${if (days > 1) "s" else ""} late" else "Due today", if (days > 0) RED else AMBER,
+                if (d.phone.isNotBlank()) "Remind" else null, { whatsapp(d.phone, reminderText(nm, d.left)) }) {
+                if (d.phone.isNotBlank()) openPerson(d.phone) else { tab = 5; notesSeg = 2; render() }
+            }
+        }
+        Db.debts().filter { !it.closed && it.direction == Debt.ME && it.due != null && it.due < tomorrow }.take(2).forEach { d ->
+            row("🧾", "You owe ${d.name.ifBlank { Db.displayName(d.phone) }} ${money(d.left)}", "Due ${if (d.due!! < today) "already" else "today"}", RED,
+                if (d.phone.isNotBlank()) "Pay" else null, { sendTo(d.phone, d.name) }) { if (d.phone.isNotBlank()) openPerson(d.phone) }
+        }
+        // Shipments / orders expected
+        Db.orders().filter { it.status in 1..3 && it.due != null && it.due < tomorrow + 86_400_000L }.take(3).forEach { o ->
+            val late = o.due!! < today
+            row(if (o.kind == Order.BUY) "🚚" else "🛒", o.title.ifBlank { o.party.ifBlank { "Order #${o.id}" } },
+                (if (late) "Expected ${dateText(o.due).substringBefore(",")} — late" else "Expected soon") + " · ${OrderStatus.NAMES[o.status]}",
+                if (late) RED else AMBER, null, null) { startActivity(Intent(this, OrderActivity::class.java).putExtra("id", o.id)) }
+        }
+        // Tasks
+        Db.tasks().filter { !it.done && it.due != null && it.due < tomorrow }.take(3).forEach { t ->
+            row("☑️", t.title, if (t.due!! < today) "Overdue" else "Today" + if (t.phone.isNotBlank()) " · ${Db.displayName(t.phone)}" else "",
+                if (t.due < today) RED else BRAND, "Done", { Db.saveTask(t.copy(done = true)); render() }) { tab = 5; notesSeg = 1; render() }
+        }
+        // Categories
+        val needs = Db.uncategorized().size
+        if (needs > 0) row("🏷", "$needs payment${if (needs == 1) "" else "s"} need a category", "Takes a few seconds", AMBER, "Review",
+            { startActivity(Intent(this, ReviewActivity::class.java)) }) { startActivity(Intent(this, ReviewActivity::class.java)) }
+        if (rows.isEmpty()) return null
+        val wrap = vbox()
+        wrap.add(sectionTitle("Needs attention"))
+        wrap.add(listCard(rows))
+        return wrap
     }
 
     private fun ratesCard(): View {
@@ -288,7 +327,7 @@ class MainActivity : BaseActivity() {
         val due = Db.tasks().filter { !it.done && (it.due == null || it.due < today) }.take(3)
         if (due.isEmpty()) return null
         val wrap = vbox()
-        wrap.add(sectionTitle("To do", "All") { tab = 3; notesSeg = 1; render() })
+        wrap.add(sectionTitle("To do", "All") { tab = 5; notesSeg = 1; render() })
         wrap.add(listCard(due.map { taskRow(it) { render() } }))
         return wrap
     }
@@ -329,7 +368,7 @@ class MainActivity : BaseActivity() {
         if (me > 0) rv.add(text("You owe ${money(me)}", 13.5f, true, RED), WRAP)
         r.add(rv, WRAP)
         c.addView(r)
-        c.setOnClickListener { tab = 3; notesSeg = 2; render() }
+        c.setOnClickListener { tab = 5; notesSeg = 2; render() }
         return c
     }
 
@@ -435,11 +474,45 @@ class MainActivity : BaseActivity() {
         else list.add(listCard(txs.take(400).map { tx -> txRow(tx, cats) { showTx(tx) { fillHistory() } } }))
     }
 
+    // ---------------- More ----------------
+
+    private fun more(): View {
+        val page = vbox()
+        val tools = vbox(16)
+        tools.add(text("More", 28f, true).apply { setPadding(dp(4), dp(8), 0, dp(12)) })
+        val items = listOf(
+            Triple<String, Int, () -> Unit>("Orders", R.drawable.ic_box, { startActivity(Intent(this, OrdersActivity::class.java)) }),
+            Triple<String, Int, () -> Unit>("Notes", R.drawable.ic_note, { tab = 5; notesSeg = 0; render() }),
+            Triple<String, Int, () -> Unit>("Tasks", R.drawable.ic_check, { tab = 5; notesSeg = 1; render() }),
+            Triple<String, Int, () -> Unit>("Debts", R.drawable.ic_debt, { tab = 5; notesSeg = 2; render() }),
+            Triple<String, Int, () -> Unit>("Rates", R.drawable.ic_rate, { startActivity(Intent(this, RatesActivity::class.java)) }),
+            Triple<String, Int, () -> Unit>("Calculator", R.drawable.ic_calc, { Calc.show(this) }),
+            Triple<String, Int, () -> Unit>("Focus", R.drawable.ic_focus, { startActivity(Intent(this, FocusActivity::class.java)) }),
+            Triple<String, Int, () -> Unit>("Categorise", R.drawable.ic_tune, { startActivity(Intent(this, ReviewActivity::class.java)) }),
+        )
+        items.chunked(4).forEachIndexed { ri, chunk ->
+            val row = hbox()
+            chunk.forEach { (label, res, go) ->
+                val v = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(0, dp(4), 0, dp(4)); setOnClickListener { go() } }
+                v.add(FrameLayout(this).apply {
+                    background = rounded(WHITE, dp(18).toFloat(), dp(1), LINE)
+                    addView(icon(res, BRAND, 24), FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+                }, dp(54), dp(54))
+                v.add(text(label, 12f, true), WRAP, top = 6)
+                row.add(v, 0, weight = 1f)
+            }
+            tools.add(row, top = if (ri == 0) 0 else 12)
+        }
+        page.add(tools)
+        page.add(settings())
+        return page
+    }
+
     // ---------------- Settings ----------------
 
     private fun settings(): View {
         val page = vbox(16)
-        page.add(text("Settings", 28f, true).apply { setPadding(dp(4), dp(8), 0, dp(4)) })
+        page.add(text("Settings", 22f, true).apply { setPadding(dp(4), dp(8), 0, dp(4)) })
 
         page.add(sectionTitle("Setup"))
         checklistCard(onlyProblems = false)?.let { page.add(it) }
@@ -518,7 +591,7 @@ class MainActivity : BaseActivity() {
         sms.addView(sv)
         page.add(sms)
 
-        page.add(text("Caalin Tracker 1.4", 12f, color = MUTED).apply {
+        page.add(text("Caalin Tracker 1.5", 12f, color = MUTED).apply {
             gravity = Gravity.CENTER; setPadding(0, dp(24), 0, dp(8))
         })
         return page
