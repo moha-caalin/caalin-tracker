@@ -104,7 +104,7 @@ class WalletEditActivity : BaseActivity() {
             val v = View(this)
             v.background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL; setColor(c)
-                if (c == color) setStroke(dp(3), INK)
+                if (c == this@WalletEditActivity.color) setStroke(dp(3), INK)
             }
             v.setOnClickListener { color = c; drawColors() }
             colors.add(v, dp(34), dp(34)).let { (it.layoutParams as LinearLayout.LayoutParams).marginEnd = dp(10) }
