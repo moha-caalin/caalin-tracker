@@ -591,7 +591,7 @@ class MainActivity : BaseActivity() {
         sms.addView(sv)
         page.add(sms)
 
-        page.add(text("Caalin Tracker 1.5.1", 12f, color = MUTED).apply {
+        page.add(text("Caalin Tracker 1.5.2", 12f, color = MUTED).apply {
             gravity = Gravity.CENTER; setPadding(0, dp(24), 0, dp(8))
         })
         return page

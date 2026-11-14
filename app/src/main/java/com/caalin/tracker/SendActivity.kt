@@ -41,7 +41,7 @@ class SendActivity : BaseActivity() {
     private lateinit var amountView: TextView
     private lateinit var sumView: TextView
     private lateinit var catRow: LinearLayout
-    private lateinit var catScroll: HorizontalScrollView
+    private lateinit var balWarn: TextView
     private lateinit var toCard: LinearLayout
     private lateinit var sendBtn: com.google.android.material.button.MaterialButton
 
@@ -93,13 +93,21 @@ class SendActivity : BaseActivity() {
         sumView = text("", 14f, true, BRAND).apply { gravity = Gravity.CENTER }
         col.add(sumView)
         col.add(View(this), MATCH, 0, weight = 1f)
+        balWarn = text("", 13.5f, true, RED).apply { gravity = Gravity.CENTER; visibility = View.GONE }
+        col.add(balWarn)
         val quick = hbox()
-        listOf(1, 5, 10, 20, 50, 100).forEach { q -> quick.add(pill("$$q", false) { amountStr = q.toString(); refresh() }, WRAP, end = 8) }
-        col.add(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(quick) }, top = 8)
-        // What for
-        catRow = hbox()
-        catScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(catRow) }
-        col.add(catScroll, top = 10)
+        val qs = listOf(1, 5, 10, 20, 50, 100)
+        qs.forEachIndexed { i, q ->
+            quick.add(text("$$q", 15f, true).apply {
+                gravity = Gravity.CENTER; setPadding(0, dp(9), 0, dp(9))
+                background = rounded(WHITE, dp(20).toFloat(), dp(1), LINE)
+                setOnClickListener { amountStr = q.toString(); refresh() }
+            }, 0, weight = 1f, end = if (i < qs.size - 1) 6 else 0)
+        }
+        col.add(quick, top = 8)
+        // What for: a grid that always fits the screen
+        catRow = vbox()
+        col.add(catRow, top = 10)
         // Keypad in thumb reach
         col.add(keypad(), top = 4)
 
@@ -136,15 +144,17 @@ class SendActivity : BaseActivity() {
     private fun drawPeople() {
         peopleRow.removeAllViews()
         fun avatar(label: String, sub: String, selected: Boolean, bg: Int, fg: Int, onClick: () -> Unit) {
-            val v = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(4), 0, dp(4), 0); setOnClickListener { onClick() } }
-            v.add(text(label, 20f, true, fg).apply {
+            val v = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(2), 0, dp(2), 0); setOnClickListener { onClick() } }
+            v.add(text(label, 18f, true, fg).apply {
                 gravity = Gravity.CENTER
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL; setColor(bg); if (selected) setStroke(dp(3), w.color)
                 }
-            }, dp(58), dp(58))
-            v.add(text(sub, 12f, selected, if (selected) INK else MUTED).apply { maxLines = 1; gravity = Gravity.CENTER; maxWidth = dp(72) }, WRAP, top = 4)
-            peopleRow.add(v, WRAP, end = 6)
+            }, dp(50), dp(50))
+            v.add(text(sub, 11.5f, selected, if (selected) INK else MUTED).apply {
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.CENTER
+            }, dp(60), WRAP, top = 4)
+            peopleRow.add(v, WRAP, end = 4)
         }
         avatar("+", "New", false, GREEN_BG, BRAND) { newNumber() }
         val recents = (listOfNotNull(extra) + Db.recentRecipients(w.id).map { normalizePhone(it.first) to it.second })
@@ -220,23 +230,26 @@ class SendActivity : BaseActivity() {
 
     private fun drawCats() {
         catRow.removeAllViews()
-        catRow.add(text("For:", 13f, true, MUTED), WRAP, end = 8)
-        Db.categories(OUT).forEach { c ->
-            val sel = c.id == categoryId
-            catRow.add(text(c.name, 14f, true, if (sel) WHITE else INK).apply {
-                setPadding(dp(14), dp(9), dp(14), dp(9))
-                background = rounded(if (sel) c.color else WHITE, dp(18).toFloat(), if (sel) 0 else dp(1), LINE)
-                setOnClickListener { categoryId = c.id; userCat = true; drawCats(); refresh() }
-            }, WRAP, end = 6)
-        }
-        catRow.add(text("+ New", 14f, true, BRAND).apply {
-            setPadding(dp(14), dp(9), dp(14), dp(9))
-            setOnClickListener { askText("New expense category") { n -> categoryId = Db.addCategory(n, OUT); userCat = true; drawCats(); refresh() } }
-        }, WRAP)
-        val idx = Db.categories(OUT).indexOfFirst { it.id == categoryId }
-        catScroll.post {
-            val target = if (idx >= 0) catRow.getChildAt(idx + 1) else null
-            catScroll.scrollTo(if (target != null) (target.left - dp(60)).coerceAtLeast(0) else 0, 0)
+        val cats = Db.categories(OUT)
+        val cells = cats.map { it.id to it.name } + (-1L to "+ New")
+        val cols = 4
+        cells.chunked(cols).forEachIndexed { ri, rowCells ->
+            val row = hbox()
+            rowCells.forEachIndexed { i, (id, name) ->
+                val sel = id == categoryId
+                val c = cats.firstOrNull { it.id == id }
+                row.add(text(name, 12.5f, true, if (sel) WHITE else if (id == -1L) BRAND else INK).apply {
+                    gravity = Gravity.CENTER; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(4), dp(8), dp(4), dp(8)); minHeight = dp(44)
+                    background = rounded(if (sel) (c?.color ?: BRAND) else WHITE, dp(14).toFloat(), if (sel) 0 else dp(1), LINE)
+                    setOnClickListener {
+                        if (id == -1L) askText("New expense category") { n -> categoryId = Db.addCategory(n, OUT); userCat = true; drawCats(); refresh() }
+                        else { categoryId = id; userCat = true; drawCats(); refresh() }
+                    }
+                }, 0, weight = 1f, end = if (i < cols - 1) 6 else 0)
+            }
+            repeat(cols - rowCells.size) { row.add(View(this), 0, weight = 1f, end = 6) }
+            catRow.add(row, top = if (ri == 0) 0 else 6)
         }
     }
 
@@ -248,7 +261,7 @@ class SendActivity : BaseActivity() {
             for (k in r) {
                 val op = k in listOf("+", "−", "×", "=")
                 row.add(text(k, 24f, !op, if (op) BRAND else INK).apply {
-                    gravity = Gravity.CENTER; setPadding(0, dp(11), 0, dp(11))
+                    gravity = Gravity.CENTER; setPadding(0, dp(9), 0, dp(9))
                     background = rounded(if (op) GREEN_BG else WHITE, dp(14).toFloat(), if (op) 0 else dp(1), LINE)
                     setOnClickListener {
                         when (k) {
@@ -270,7 +283,7 @@ class SendActivity : BaseActivity() {
                     if (k == "⌫") setOnLongClickListener { amountStr = ""; refresh(); true }
                 }, 0, weight = 1f, end = if (k != r.last()) 8 else 0)
             }
-            pad.add(row, top = 8)
+            pad.add(row, top = 6)
         }
         return pad
     }
@@ -281,6 +294,11 @@ class SendActivity : BaseActivity() {
         sumView.text = if (Calc.hasOperator(amountStr)) Calc.eval(amountStr)?.let { "= " + money(it) } ?: "…" else ""
         sumView.visibility = if (sumView.text.isEmpty()) View.GONE else View.VISIBLE
         val a = amountValue()
+        val bal = Db.latestBalance(w.id)
+        if (bal != null && a > bal + 0.0001) {
+            balWarn.text = "More than your balance (${money(bal)})"
+            balWarn.visibility = View.VISIBLE
+        } else balWarn.visibility = View.GONE
         val ready = phone.length >= 7 && a > 0 && categoryId != null && !busy && !Pending.active
         sendBtn.isEnabled = ready
         sendBtn.text = when {
